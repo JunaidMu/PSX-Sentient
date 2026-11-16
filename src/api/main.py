@@ -11,7 +11,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from fastapi import Body, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -55,6 +61,24 @@ def _load_latest_signals_payload() -> dict[str, Any]:
     if not LATEST_SIGNALS_JSON_PATH.exists():
         generate_latest_signals_snapshot()
     return json.loads(LATEST_SIGNALS_JSON_PATH.read_text(encoding="utf-8"))
+
+
+@app.get("/")
+async def root() -> dict[str, Any]:
+    """Root welcome endpoint with links to interactive documentation and API routes."""
+    return {
+        "service": "PSX-Sentient API",
+        "version": "1.0.0",
+        "status": "ok",
+        "description": "Regime-Adaptive Late-Fusion Stock Movement & Sentiment Engine for 30 KSE-100 Equities",
+        "endpoints": {
+            "docs": "/docs",
+            "health": "/health",
+            "latest_signals": "/signals/latest",
+            "ablation_metrics": "/ablation",
+            "predict_symbol": "/predict/{symbol}",
+        },
+    }
 
 
 @app.get("/health")

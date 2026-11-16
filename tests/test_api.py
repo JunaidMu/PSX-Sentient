@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from fastapi.testclient import TestClient
 import numpy as np
 
@@ -9,6 +16,18 @@ from src.api.main import app
 from src.data.live_updater import compute_whale_block_metric, parse_psx_off_market_csv
 
 client = TestClient(app)
+
+
+def test_root_endpoint() -> None:
+    """Verify GET / returns welcome JSON with links to /docs, /health, /signals/latest, and /ablation."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert "/docs" in data["endpoints"].values()
+    assert "/health" in data["endpoints"].values()
+    assert "/signals/latest" in data["endpoints"].values()
+    assert "/ablation" in data["endpoints"].values()
 
 
 def test_off_market_whale_block_detector() -> None:

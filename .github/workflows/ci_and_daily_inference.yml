@@ -11,6 +11,10 @@ on:
     - cron: "30 3 * * 1-5"
   workflow_dispatch:
 
+env:
+  PYTHONPATH: "."
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   ci-and-inference:
     runs-on: ubuntu-latest
@@ -30,9 +34,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
-      - name: Run FastAPI & Late-Fusion Unit Tests
+      - name: Verify Committed Snapshot & Run Full Unit Test Suite
         run: |
-          pytest -v tests/test_api.py
+          test -f models/latest_signals.json
+          python -m pytest -v
 
       - name: Run Live PSX News & Pre-Market Inference Check (Scheduled / Manual)
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

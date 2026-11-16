@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -12,20 +19,59 @@ from src.features.build_features import (
     OUTPUT_PARQUET_PATH,
     compute_features_and_labels,
 )
+from src.nlp.entity_mapper import KSE30_SYMBOLS
+
+
+def _build_synthetic_raw_df() -> pd.DataFrame:
+    """Generate a deterministic 30-symbol synthetic dataset when local DVC CSV is absent on CI."""
+    rng = np.random.default_rng(42)
+    dates = pd.bdate_range("2022-01-03", "2023-06-30")
+    frames: list[pd.DataFrame] = []
+    for idx, sym in enumerate(KSE30_SYMBOLS):
+        n = len(dates)
+        rets = rng.normal(0.0, 0.015, size=n)
+        close = 100.0 * np.exp(np.cumsum(rets))
+        open_p = close * np.exp(rng.normal(0.0, 0.004, size=n))
+        high = np.maximum(open_p, close) * (1.0 + np.abs(rng.normal(0.0, 0.005, size=n)))
+        low = np.minimum(open_p, close) * (1.0 - np.abs(rng.normal(0.0, 0.005, size=n)))
+        vol = rng.integers(100_000, 2_000_000, size=n, dtype="int64")
+        ex_div = np.zeros(n, dtype="int64")
+        if idx < 10:
+            ex_div[60] = 1
+        frames.append(
+            pd.DataFrame(
+                {
+                    "symbol": sym,
+                    "date": dates,
+                    "open": open_p,
+                    "high": high,
+                    "low": low,
+                    "close": close,
+                    "volume": vol,
+                    "is_ex_dividend_gap": ex_div,
+                    "brent_close": 75.0 + np.cumsum(rng.normal(0.0, 0.5, size=n)),
+                    "usdpkr_close": 278.0 + np.cumsum(rng.normal(0.0, 0.2, size=n)),
+                    "dxy_close": 104.0 + np.cumsum(rng.normal(0.0, 0.1, size=n)),
+                }
+            )
+        )
+    return pd.concat(frames, ignore_index=True)
 
 
 @pytest.fixture(scope="module")
 def raw_df() -> pd.DataFrame:
-    """Load the Phase 1 clean dataset once per test module."""
-    assert INPUT_CSV_PATH.exists(), f"Missing input dataset: {INPUT_CSV_PATH}"
+    """Load the Phase 1 clean dataset once per test module (or synthetic fixture on CI)."""
+    if not INPUT_CSV_PATH.exists():
+        return _build_synthetic_raw_df()
     return pd.read_csv(INPUT_CSV_PATH, parse_dates=["date"])
 
 
 @pytest.fixture(scope="module")
-def feature_df() -> pd.DataFrame:
-    """Load the generated Phase 2 feature store parquet."""
-    assert OUTPUT_PARQUET_PATH.exists(), f"Missing feature store: {OUTPUT_PARQUET_PATH}"
-    return pd.read_parquet(OUTPUT_PARQUET_PATH)
+def feature_df(raw_df: pd.DataFrame) -> pd.DataFrame:
+    """Load the generated Phase 2 feature store parquet (or compute from synthetic fixture on CI)."""
+    if OUTPUT_PARQUET_PATH.exists():
+        return pd.read_parquet(OUTPUT_PARQUET_PATH)
+    return compute_features_and_labels(raw_df, drop_Incomplete=True)
 
 
 def test_feature_store_schema_and_completeness(feature_df: pd.DataFrame) -> None:

@@ -11,6 +11,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import pandas as pd
 import streamlit as st
 
@@ -173,7 +179,7 @@ def main() -> None:
         ]
         st.dataframe(
             view_df[display_cols],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -260,7 +266,7 @@ def main() -> None:
                         "P(Up)": f"{m['precision_up'] * 100:.2f}%",
                     }
                 )
-            st.dataframe(pd.DataFrame(ab_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(ab_rows), width="stretch", hide_index=True)
 
         st.subheader("Phase 3: Purged Walk-Forward (2023–2025) & Holdout (2026) Baseline Comparison")
         if model_metrics and "models" in model_metrics:
@@ -306,7 +312,7 @@ def main() -> None:
                         "P(Up)": round(tm["precision_up"], 4),
                     }
                 )
-            st.dataframe(pd.DataFrame(m_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(m_rows), width="stretch", hide_index=True)
 
 
 if __name__ == "__main__":
