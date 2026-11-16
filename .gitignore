@@ -1,0 +1,27 @@
+# Virtual environment & Python cache
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.env
+
+# MLflow & CatBoost artifacts
+mlruns/
+catboost_info/
+
+# Historical data & feature store (large datasets & intermediate audit files)
+psx_historical_data/*.csv
+psx_historical_data/*.json
+psx_historical_data/*.parquet
+psx_historical_data/audit/
+
+# Model binaries & prediction tables (keep only models/model_comparison_metrics.json)
+models/*.pkl
+models/*.parquet
+models/*.csv
+
+# One-off data exploration / scraping helper scripts
+fetch_psx_data.py
+audit_historical_data.py
+missedsplit_bonus.py
