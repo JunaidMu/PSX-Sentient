@@ -1,0 +1,66 @@
+{
+  "split": "Test_2026",
+  "total_rows": 3570,
+  "date_range": [
+    "2026-01-01",
+    "2026-06-29"
+  ],
+  "strategies": {
+    "a_tabular_argmax_baseline": {
+      "macro_f1": 0.4281935005569371,
+      "active_signal_precision": 0.32651072124756336,
+      "active_macro_precision": 0.3331161971830986,
+      "active_signal_rate": 0.5747899159663865,
+      "precision_down": 0.3720657276995305,
+      "recall_down": 0.3828502415458937,
+      "f1_down": 0.3773809523809524,
+      "precision_neutral": 0.6317523056653491,
+      "recall_neutral": 0.496120020693223,
+      "f1_neutral": 0.5557809330628803,
+      "precision_up": 0.2941666666666667,
+      "recall_up": 0.4363411619283066,
+      "f1_up": 0.3514186162269786,
+      "active_signal_count": 2052,
+      "veto_count": 0
+    },
+    "b_conviction_thresholded_tabular": {
+      "macro_f1": 0.30324181679197887,
+      "active_signal_precision": 0.547486033519553,
+      "active_macro_precision": 0.463308634938729,
+      "active_signal_rate": 0.050140056022408966,
+      "precision_down": 0.7024793388429752,
+      "recall_down": 0.10265700483091787,
+      "f1_down": 0.1791359325605901,
+      "precision_neutral": 0.549985255086995,
+      "recall_neutral": 0.9648215209518882,
+      "f1_neutral": 0.7006010518407213,
+      "precision_up": 0.22413793103448276,
+      "recall_up": 0.016069221260815822,
+      "f1_up": 0.029988465974625143,
+      "active_signal_count": 179,
+      "veto_count": 0
+    },
+    "c_full_late_fusion_conflict_veto": {
+      "macro_f1": 0.300787883764472,
+      "active_signal_precision": 0.6976744186046512,
+      "active_macro_precision": 0.6169724770642202,
+      "active_signal_rate": 0.03613445378151261,
+      "precision_down": 0.7339449541284404,
+      "recall_down": 0.0966183574879227,
+      "f1_down": 0.17075773745997866,
+      "precision_neutral": 0.5524556814879396,
+      "recall_neutral": 0.983445421624418,
+      "f1_neutral": 0.7074804614812058,
+      "precision_up": 0.5,
+      "recall_up": 0.012360939431396786,
+      "f1_up": 0.024125452352231604,
+      "active_signal_count": 129,
+      "veto_count": 71
+    }
+  },
+  "deltas_vs_argmax": {
+    "active_signal_precision_gain": 0.3711636973570878,
+    "macro_f1_gain": -0.1274056167924651,
+    "conflict_vetoes_triggered": 71
+  }
+}
