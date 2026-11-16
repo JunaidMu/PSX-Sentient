@@ -1,0 +1,34 @@
+stages:
+  features:
+    cmd: python -m src.features.build_features
+    deps:
+      - psx_historical_data/stocks_with_macro.csv
+      - src/features/build_features.py
+    outs:
+      - psx_historical_data/feature_store.parquet
+
+  train:
+    cmd: python -m src.models.train_baseline
+    deps:
+      - psx_historical_data/feature_store.parquet
+      - src/models/train_baseline.py
+    outs:
+      - models/best_model.pkl
+      - models/lightgbm_model.pkl
+      - models/catboost_model.pkl
+      - models/test_2026_predictions.parquet
+    metrics:
+      - models/model_comparison_metrics.json:
+          cache: false
+
+  fusion:
+    cmd: python -m src.fusion.late_fusion
+    deps:
+      - models/test_2026_predictions.parquet
+      - psx_historical_data/feature_store.parquet
+      - src/fusion/late_fusion.py
+    outs:
+      - models/test_2026_fused_predictions.parquet
+    metrics:
+      - models/ablation_metrics.json:
+          cache: false
