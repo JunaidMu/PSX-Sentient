@@ -20,6 +20,7 @@ psx_historical_data/audit/
 models/*.pkl
 models/*.parquet
 models/*.csv
+models/finbert_cache/
 
 # One-off data exploration / scraping helper scripts
 fetch_psx_data.py
