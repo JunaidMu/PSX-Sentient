@@ -1,0 +1,15 @@
+# Minimal dependencies for the reproducible training pipeline (dvc repro).
+# Serving / NLP dependencies (torch, transformers, fastapi, streamlit) live in requirements.txt.
+numpy>=2.0.0,<3
+pandas>=2.2.0,<4
+pyarrow>=18.0.0
+scikit-learn>=1.5.0,<2
+lightgbm>=4.5.0,<5
+catboost>=1.2.7,<2
+mlflow>=3.0.0,<4
+joblib>=1.4.0
+requests>=2.32.0
+beautifulsoup4>=4.12.0
+lxml>=5.3.0
+dvc>=3.50,<4
+pytest>=8.3.0

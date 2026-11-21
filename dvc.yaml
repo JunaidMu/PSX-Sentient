@@ -1,34 +1,68 @@
+# PSX-Sentient reproducible training pipeline (Deliverable 1)
+#   dvc pull     # fetch versioned raw data (and cached outputs) from the DagsHub remote
+#   dvc repro    # run every stage below in order; unchanged stages are skipped
 stages:
+  validate_raw:
+    cmd: python -m src.data.validate raw
+    deps:
+      - psx_historical_data/stocks_with_macro.csv
+      - src/data/validate.py
+    metrics:
+      - reports/validation_raw.json:
+          cache: false
+
+  clean:
+    cmd: python -m src.data.clean_data
+    deps:
+      - psx_historical_data/stocks_with_macro.csv
+      - reports/validation_raw.json
+      - src/data/clean_data.py
+    outs:
+      - psx_historical_data/stocks_clean.csv
+
   features:
     cmd: python -m src.features.build_features
     deps:
-      - psx_historical_data/stocks_with_macro.csv
+      - psx_historical_data/stocks_clean.csv
       - src/features/build_features.py
     outs:
       - psx_historical_data/feature_store.parquet
+
+  validate_features:
+    cmd: python -m src.data.validate features
+    deps:
+      - psx_historical_data/feature_store.parquet
+      - src/data/validate.py
+    metrics:
+      - reports/validation_features.json:
+          cache: false
+
+  baselines:
+    cmd: python -m src.models.baselines
+    deps:
+      - psx_historical_data/feature_store.parquet
+      - reports/validation_features.json
+      - src/models/baselines.py
+      - src/models/tracking.py
+    metrics:
+      - models/baseline_metrics.json:
+          cache: false
 
   train:
     cmd: python -m src.models.train_baseline
     deps:
       - psx_historical_data/feature_store.parquet
+      - reports/validation_features.json
+      - models/baseline_metrics.json
       - src/models/train_baseline.py
+      - src/models/tracking.py
     outs:
       - models/best_model.pkl
       - models/lightgbm_model.pkl
       - models/catboost_model.pkl
       - models/test_2026_predictions.parquet
+      - models/all_models_test_2026_predictions.parquet
+      - models/val_oof_predictions.parquet
     metrics:
       - models/model_comparison_metrics.json:
-          cache: false
-
-  fusion:
-    cmd: python -m src.fusion.late_fusion
-    deps:
-      - models/test_2026_predictions.parquet
-      - psx_historical_data/feature_store.parquet
-      - src/fusion/late_fusion.py
-    outs:
-      - models/test_2026_fused_predictions.parquet
-    metrics:
-      - models/ablation_metrics.json:
           cache: false

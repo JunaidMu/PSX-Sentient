@@ -9,6 +9,11 @@ Strict Engineering Rules enforced:
 4. Logs `macro_f1`, per-class precision/recall, and `active_signal_precision` to MLflow (`mlruns`),
    and saves the best model artifact and Test 2026 predictions (`P_down`, `P_neutral`, `P_up`, `E_tech`)
    to `models/`.
+5. Early stopping never sees the data a fold is scored on: every fold (validation and test) carves its
+   early-stopping slice from the tail of its own training window, separated by a 5-day purge.
+6. The best model is chosen on the walk-forward validation mean only (Test_2026 is never used for
+   selection), then logged with dataset-version tags and registered in the MLflow Model Registry as
+   `psx-sentient-direction` with the alias `champion`.
 """
 
 from __future__ import annotations
@@ -35,12 +40,19 @@ import joblib
 import lightgbm as lgb
 from lightgbm import LGBMClassifier
 import mlflow
+import mlflow.catboost
+import mlflow.lightgbm
+from mlflow.models import infer_signature
+from mlflow.tracking import MlflowClient
 from sklearn.metrics import f1_score, precision_recall_fscore_support
 
 from src.features.build_features import FEATURE_COLUMNS, OUTPUT_PARQUET_PATH
+from src.models.tracking import REGISTERED_MODEL_NAME, log_dataset, setup_mlflow
 
 MODELS_DIR = Path("models")
 MLRUNS_DIR = Path("mlruns")
+ES_VAL_DAYS = 60
+PURGE_DAYS = 5
 
 FORBIDDEN_COLUMNS: set[str] = {
     "date",
@@ -239,6 +251,8 @@ def _train_lgbm_fold(
         reg_lambda=1.0,
         random_state=42,
         n_jobs=-1,
+        deterministic=True,
+        force_col_wise=True,
         verbose=-1,
     )
     model.fit(
@@ -298,12 +312,34 @@ def _split_train_with_purged_early_stop(
     return inner_train_mask, es_val_mask
 
 
+def _log_model(model_name: str, model: Any, X_example: pd.DataFrame) -> str:
+    """Log a fitted model with its native MLflow flavour and return the model URI."""
+    X_example = X_example.astype("float64")  # binary flags as floats so the schema accepts any numeric input
+    signature = infer_signature(X_example, model.predict_proba(X_example))
+    if model_name == "CatBoost":
+        info = mlflow.catboost.log_model(model, name="model", signature=signature, input_example=X_example.head(5))
+    else:
+        info = mlflow.lightgbm.log_model(model, name="model", signature=signature, input_example=X_example.head(5))
+    return info.model_uri
+
+
+def _register_champion(model_uri: str, tags: dict[str, str]) -> dict[str, str]:
+    """Register the selected model and point the `champion` alias at the new version."""
+    version = mlflow.register_model(model_uri, REGISTERED_MODEL_NAME)
+    client = MlflowClient()
+    client.set_registered_model_alias(REGISTERED_MODEL_NAME, "champion", version.version)
+    for key, value in tags.items():
+        client.set_model_version_tag(REGISTERED_MODEL_NAME, version.version, key, value)
+    return {"name": REGISTERED_MODEL_NAME, "version": str(version.version), "alias": "champion"}
+
+
 def run_phase3_pipeline(
     feature_store_path: Path = OUTPUT_PARQUET_PATH,
     models_dir: Path = MODELS_DIR,
     mlruns_dir: Path = MLRUNS_DIR,
+    register: bool = True,
 ) -> dict[str, Any]:
-    """Execute Phase 3 Purged Walk-Forward evaluation, MLflow logging, and 2026 Holdout scoring."""
+    """Execute Phase 3 Purged Walk-Forward evaluation, MLflow logging, 2026 Holdout scoring and registration."""
     df = pd.read_parquet(feature_store_path)
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values(["date", "symbol"]).reset_index(drop=True)
@@ -311,14 +347,10 @@ def run_phase3_pipeline(
     X_all, feature_cols = get_stationary_features(df)
     y_all = df["target_class"].to_numpy(dtype="int64")
 
-    val_folds, test_fold = generate_purged_walk_forward_splits(df, purge_trading_days=5)
+    val_folds, test_fold = generate_purged_walk_forward_splits(df, purge_trading_days=PURGE_DAYS)
 
     models_dir.mkdir(parents=True, exist_ok=True)
-    mlruns_dir.mkdir(parents=True, exist_ok=True)
-
-    db_path = (mlruns_dir / "mlflow.db").resolve().as_posix()
-    mlflow.set_tracking_uri(f"sqlite:///{db_path}")
-    mlflow.set_experiment("PSX_Phase3_Baseline_ML")
+    setup_mlflow(mlruns_dir)
 
     model_builders = {
         "LightGBM": _train_lgbm_fold,
@@ -328,15 +360,29 @@ def run_phase3_pipeline(
     results_summary: dict[str, Any] = {
         "feature_columns": feature_cols,
         "num_features": len(feature_cols),
+        "selection_criterion": "max(ValMean macro_f1 + 0.5 * ValMean active_signal_precision); Test_2026 not used",
         "models": {},
     }
 
     all_test_preds: dict[str, pd.DataFrame] = {}
     all_val_preds: dict[str, pd.DataFrame] = {}
     trained_test_models: dict[str, Any] = {}
+    run_ids: dict[str, str] = {}
+    model_uris: dict[str, str] = {}
+
+    def _fit_on_window(train_fn, train_dates: np.ndarray):
+        """Fit using the tail of `train_dates` (after a purge gap) for early stopping only."""
+        inner_tr_mask, es_val_mask = _split_train_with_purged_early_stop(
+            df, train_dates, purge_trading_days=PURGE_DAYS, es_val_days=ES_VAL_DAYS
+        )
+        return train_fn(
+            X_all.iloc[inner_tr_mask], y_all[inner_tr_mask], X_all.iloc[es_val_mask], y_all[es_val_mask]
+        )
 
     for model_name, train_fn in model_builders.items():
-        with mlflow.start_run(run_name=f"{model_name}_PurgedWalkForward"):
+        with mlflow.start_run(run_name=f"{model_name}_PurgedWalkForward") as run:
+            run_ids[model_name] = run.info.run_id
+            mlflow.set_tags({"model_family": "primary", "model_type": model_name})
             mlflow.log_params(
                 {
                     "model_type": model_name,
@@ -344,101 +390,97 @@ def run_phase3_pipeline(
                     "learning_rate": 0.03,
                     "max_depth": 6,
                     "early_stopping_rounds": 50,
+                    "early_stopping_slice_days": ES_VAL_DAYS,
                     "class_weighting": "balanced",
-                    "purge_trading_days": 5,
+                    "purge_trading_days": PURGE_DAYS,
                     "num_features": len(feature_cols),
+                    "random_seed": 42,
                 }
             )
+            log_dataset(df, feature_store_path, context="training")
 
             fold_metrics_map: dict[str, dict[str, float]] = {}
             oof_pred_frames: list[pd.DataFrame] = []
 
-            # 1. Walk-Forward Validation Folds (2023, 2024, 2025)
+            # 1. Walk-Forward Validation Folds (2023, 2024, 2025); the fold being scored is never
+            #    used for early stopping.
             for fold in val_folds:
-                X_tr, y_tr = X_all.iloc[fold.train_mask], y_all[fold.train_mask]
+                fitted = _fit_on_window(train_fn, fold.train_dates)
                 X_va, y_va = X_all.iloc[fold.eval_mask], y_all[fold.eval_mask]
-
-                fitted = train_fn(X_tr, y_tr, X_va, y_va)
                 proba_va = np.asarray(fitted.predict_proba(X_va), dtype="float64")
                 pred_va = np.argmax(proba_va, axis=1)
 
                 f_metrics = compute_classification_metrics(y_va, pred_va)
                 fold_metrics_map[fold.name] = f_metrics
-
                 for m_key, m_val in f_metrics.items():
                     mlflow.log_metric(f"{fold.name}_{m_key}", m_val)
 
                 oof_pred_frames.append(
                     build_predictions_df(
-                        df.iloc[fold.eval_mask],
-                        proba_va,
-                        pred_va,
-                        model_name=model_name,
-                        split_name=fold.name,
+                        df.iloc[fold.eval_mask], proba_va, pred_va, model_name=model_name, split_name=fold.name
                     )
                 )
 
-            oof_df = pd.concat(oof_pred_frames, ignore_index=True)
-            all_val_preds[model_name] = oof_df
+            all_val_preds[model_name] = pd.concat(oof_pred_frames, ignore_index=True)
 
-            # Mean walk-forward validation metrics across Val 2023, Val 2024, Val 2025
             mean_val_metrics: dict[str, float] = {}
             metric_keys = list(next(iter(fold_metrics_map.values())).keys())
             for k in metric_keys:
                 mean_val_metrics[k] = float(np.mean([fold_metrics_map[f.name][k] for f in val_folds]))
                 mlflow.log_metric(f"ValMean_{k}", mean_val_metrics[k])
 
-            # 2. Final Holdout Evaluation on Test 2026 (2026-01-01 to 2026-06-29)
-            # Use internal pre-2026 early-stopping validation slice so Test 2026 is strictly unseen
-            inner_tr_mask, es_val_mask = _split_train_with_purged_early_stop(
-                df, test_fold.train_dates, purge_trading_days=5, es_val_days=60
-            )
-            X_tr_final, y_tr_final = X_all.iloc[inner_tr_mask], y_all[inner_tr_mask]
-            X_es_val, y_es_val = X_all.iloc[es_val_mask], y_all[es_val_mask]
+            # 2. Final Holdout Evaluation on Test 2026
+            final_model = _fit_on_window(train_fn, test_fold.train_dates)
             X_te, y_te = X_all.iloc[test_fold.eval_mask], y_all[test_fold.eval_mask]
-
-            final_model = train_fn(X_tr_final, y_tr_final, X_es_val, y_es_val)
             proba_te = np.asarray(final_model.predict_proba(X_te), dtype="float64")
             pred_te = np.argmax(proba_te, axis=1)
 
             test_metrics = compute_classification_metrics(y_te, pred_te)
             for m_key, m_val in test_metrics.items():
                 mlflow.log_metric(f"Test_2026_{m_key}", m_val)
-                # Also log top-level required metric names for convenient MLflow querying
-                mlflow.log_metric(m_key, m_val)
 
-            test_pred_df = build_predictions_df(
-                df.iloc[test_fold.eval_mask],
-                proba_te,
-                pred_te,
-                model_name=model_name,
-                split_name="Test_2026",
+            all_test_preds[model_name] = build_predictions_df(
+                df.iloc[test_fold.eval_mask], proba_te, pred_te, model_name=model_name, split_name="Test_2026"
             )
-            all_test_preds[model_name] = test_pred_df
             trained_test_models[model_name] = final_model
 
             model_file = models_dir / f"{model_name.lower()}_model.pkl"
             joblib.dump(final_model, model_file)
-            mlflow.log_artifact(str(model_file))
+            model_uris[model_name] = _log_model(model_name, final_model, X_te)
 
             results_summary["models"][model_name] = {
                 "folds": fold_metrics_map,
                 "val_mean": mean_val_metrics,
                 "test_2026": test_metrics,
                 "model_path": str(model_file),
+                "mlflow_run_id": run.info.run_id,
             }
 
-    # Select best model by Walk-Forward ValMean macro_f1 + active_signal_precision (and Test 2026 macro_f1)
+    # Select best model on walk-forward VALIDATION only (Test_2026 is reported, never used to choose)
     best_model_name = max(
         results_summary["models"].keys(),
         key=lambda m: (
-            results_summary["models"][m]["test_2026"]["macro_f1"]
-            + 0.5 * results_summary["models"][m]["test_2026"]["active_signal_precision"]
+            results_summary["models"][m]["val_mean"]["macro_f1"]
+            + 0.5 * results_summary["models"][m]["val_mean"]["active_signal_precision"]
         ),
     )
     results_summary["best_model"] = best_model_name
 
-    # Save best model artifact and predictions to models/
+    with mlflow.start_run(run_id=run_ids[best_model_name]):
+        mlflow.set_tag("selected_as_best", "true")
+
+    if register:
+        best = results_summary["models"][best_model_name]
+        results_summary["registered_model"] = _register_champion(
+            model_uris[best_model_name],
+            {
+                "model_type": best_model_name,
+                "val_mean_macro_f1": f"{best['val_mean']['macro_f1']:.4f}",
+                "test_2026_macro_f1": f"{best['test_2026']['macro_f1']:.4f}",
+                "mlflow_run_id": run_ids[best_model_name],
+            },
+        )
+
     best_model_path = models_dir / "best_model.pkl"
     joblib.dump(trained_test_models[best_model_name], best_model_path)
 
@@ -446,12 +488,12 @@ def run_phase3_pipeline(
     best_test_preds.to_parquet(models_dir / "test_2026_predictions.parquet", index=False)
     best_test_preds.to_csv(models_dir / "test_2026_predictions.csv", index=False)
 
-    # Also save combined predictions from both models for comparison/auditing
-    combined_test_preds = pd.concat(list(all_test_preds.values()), ignore_index=True)
-    combined_test_preds.to_parquet(models_dir / "all_models_test_2026_predictions.parquet", index=False)
-
-    combined_val_preds = pd.concat(list(all_val_preds.values()), ignore_index=True)
-    combined_val_preds.to_parquet(models_dir / "val_oof_predictions.parquet", index=False)
+    pd.concat(list(all_test_preds.values()), ignore_index=True).to_parquet(
+        models_dir / "all_models_test_2026_predictions.parquet", index=False
+    )
+    pd.concat(list(all_val_preds.values()), ignore_index=True).to_parquet(
+        models_dir / "val_oof_predictions.parquet", index=False
+    )
 
     summary_json_path = models_dir / "model_comparison_metrics.json"
     summary_json_path.write_text(json.dumps(results_summary, indent=2), encoding="utf-8")
@@ -499,7 +541,10 @@ def _print_comparison_report(summary: dict[str, Any]) -> None:
         )
         print("-" * len(header))
 
-    print(f"Selected Best Model saved to models/best_model.pkl: {summary['best_model']}")
+    print(f"Selected Best Model (by validation) saved to models/best_model.pkl: {summary['best_model']}")
+    if "registered_model" in summary:
+        rm = summary["registered_model"]
+        print(f"Registered in MLflow Model Registry: {rm['name']} v{rm['version']} (alias: {rm['alias']})")
 
 
 if __name__ == "__main__":

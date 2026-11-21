@@ -1,0 +1,5 @@
+outs:
+- md5: 693d43819427dc072526892746f66df3
+  size: 3849099
+  hash: md5
+  path: all_stocks.csv

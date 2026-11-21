@@ -1,0 +1,54 @@
+{
+  "stage": "features",
+  "source": "psx_historical_data\\feature_store.parquet",
+  "passed": true,
+  "checks_total": 9,
+  "checks_failed": 0,
+  "checks": [
+    {
+      "name": "schema.required_columns",
+      "passed": true,
+      "detail": "missing=[]"
+    },
+    {
+      "name": "quality.no_nan",
+      "passed": true,
+      "detail": "nan_cells=0"
+    },
+    {
+      "name": "quality.no_inf",
+      "passed": true,
+      "detail": "inf_cells=0"
+    },
+    {
+      "name": "quality.labels_valid",
+      "passed": true,
+      "detail": "labels=[np.int64(0), np.int64(1), np.int64(2)]"
+    },
+    {
+      "name": "quality.class_balance",
+      "passed": true,
+      "detail": "proportions={1: 0.5335, 0: 0.2341, 2: 0.2323}"
+    },
+    {
+      "name": "quality.rsi_bounds",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "quality.positive_volatility",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "quality.unique_symbol_date",
+      "passed": true,
+      "detail": "duplicates=0"
+    },
+    {
+      "name": "quality.symbol_count",
+      "passed": true,
+      "detail": "symbols=30"
+    }
+  ]
+}

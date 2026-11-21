@@ -1,6 +1,7 @@
 """Phase 2: Feature Engineering & Triple-Barrier 3-Class Labeling.
 
-Reads `psx_historical_data/stocks_with_macro.csv`, computes strictly causal per-symbol
+Reads `psx_historical_data/stocks_clean.csv` (output of `src.data.clean_data`, which repairs
+USD/PKR bad ticks and flags ex-dividend gaps on top of `stocks_with_macro.csv`), computes strictly causal per-symbol
 technical, macro, and seasonality features along with the dynamic volatility-adjusted
 Triple-Barrier 3-class target (`target_class`), and writes `psx_historical_data/feature_store.parquet`.
 """
@@ -11,8 +12,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-INPUT_CSV_PATH = Path("psx_historical_data/stocks_with_macro.csv")
+INPUT_CSV_PATH = Path("psx_historical_data/stocks_clean.csv")
 OUTPUT_PARQUET_PATH = Path("psx_historical_data/feature_store.parquet")
+
+# Trading days by which macro closes are lagged so only values known at the PSX close are used
+MACRO_LAG_DAYS = 1
 
 FEATURE_COLUMNS: list[str] = [
     # 1. Daily & lagged log returns
@@ -188,16 +192,20 @@ def compute_features_and_labels(
     df["close_to_sma50"] = df["close"] / sma_50
     df["vol_shock_20"] = df["volume"] / vol_sma_20.replace(0.0, np.nan)
 
-    # 3. Macro Features: 1-day and 5-day log returns of brent_close, usdpkr_close, dxy_close per symbol
+    # 3. Macro Features: 1-day and 5-day log returns of brent_close, usdpkr_close, dxy_close per symbol.
+    # Macro closes are lagged by one trading day (MACRO_LAG_DAYS): Brent/DXY settle in New York
+    # (~21:00 UTC) and USD/PKR's daily close is also after the PSX close (~10:30 UTC), so the
+    # value stamped on date t is not yet known when the PSX day-t close is observed.
     for macro_prefix, col_name in (
         ("brent", "brent_close"),
         ("usdpkr", "usdpkr_close"),
         ("dxy", "dxy_close"),
     ):
-        prev_1 = g[col_name].shift(1)
-        prev_5 = g[col_name].shift(5)
-        df[f"{macro_prefix}_ret_1d"] = np.log(df[col_name] / prev_1)
-        df[f"{macro_prefix}_ret_5d"] = np.log(df[col_name] / prev_5)
+        known = g[col_name].shift(MACRO_LAG_DAYS)
+        prev_1 = g[col_name].shift(MACRO_LAG_DAYS + 1)
+        prev_5 = g[col_name].shift(MACRO_LAG_DAYS + 5)
+        df[f"{macro_prefix}_ret_1d"] = np.log(known / prev_1)
+        df[f"{macro_prefix}_ret_5d"] = np.log(known / prev_5)
 
     # 4. Seasonality Features
     month = df["date"].dt.month

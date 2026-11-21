@@ -1,0 +1,99 @@
+{
+  "stage": "raw",
+  "source": "psx_historical_data\\stocks_with_macro.csv",
+  "passed": true,
+  "checks_total": 18,
+  "checks_failed": 0,
+  "checks": [
+    {
+      "name": "schema.required_columns",
+      "passed": true,
+      "detail": "missing=[]"
+    },
+    {
+      "name": "schema.date_parseable",
+      "passed": true,
+      "detail": "unparseable=0"
+    },
+    {
+      "name": "schema.numeric_dtypes",
+      "passed": true,
+      "detail": "non_numeric=[]"
+    },
+    {
+      "name": "quality.no_missing_values",
+      "passed": true,
+      "detail": "nulls={}"
+    },
+    {
+      "name": "quality.unique_symbol_date",
+      "passed": true,
+      "detail": "duplicates=0"
+    },
+    {
+      "name": "quality.expected_symbols",
+      "passed": true,
+      "detail": "missing=[] unexpected=[]"
+    },
+    {
+      "name": "quality.positive_prices",
+      "passed": true,
+      "detail": "non_positive=0"
+    },
+    {
+      "name": "quality.ohlc_consistent",
+      "passed": true,
+      "detail": "violations=0"
+    },
+    {
+      "name": "quality.non_negative_volume",
+      "passed": true,
+      "detail": "negative=0"
+    },
+    {
+      "name": "quality.binary_ex_div_flag",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "quality.brent_close_in_range",
+      "passed": true,
+      "detail": "range=[5.0,250.0] out_of_range=0"
+    },
+    {
+      "name": "quality.usdpkr_close_in_range",
+      "passed": true,
+      "detail": "range=[80.0,500.0] out_of_range=0"
+    },
+    {
+      "name": "quality.dxy_close_in_range",
+      "passed": true,
+      "detail": "range=[70.0,160.0] out_of_range=0"
+    },
+    {
+      "name": "quality.no_future_dates",
+      "passed": true,
+      "detail": "future_rows=0"
+    },
+    {
+      "name": "quality.no_weekend_dates",
+      "passed": true,
+      "detail": "weekend_rows=0"
+    },
+    {
+      "name": "quality.min_history_per_symbol",
+      "passed": true,
+      "detail": "short={}"
+    },
+    {
+      "name": "quality.max_missing_days_per_symbol",
+      "passed": true,
+      "detail": "over_limit={}"
+    },
+    {
+      "name": "quality.no_unadjusted_splits",
+      "passed": true,
+      "detail": "moves_over_60pct=0"
+    }
+  ]
+}

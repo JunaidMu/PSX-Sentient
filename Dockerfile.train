@@ -1,0 +1,30 @@
+# Reproducible training image for Deliverable 1.
+#
+#   docker build -f Dockerfile.train -t psx-sentient-train .
+#   docker run --rm \
+#     -e DAGSHUB_USER=<user> -e DAGSHUB_TOKEN=<token> \
+#     -v "$PWD/mlruns:/app/mlruns" \
+#     psx-sentient-train
+#
+# The container pulls the versioned data from the DagsHub DVC remote, runs every pipeline
+# stage (validation -> cleaning -> features -> validation -> baselines -> training/registration)
+# and prints the metrics. Mount mlruns/ to keep the MLflow runs and registry on the host.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app \
+    MLFLOW_DISABLE_AGENT_HINT=1
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends git libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-train.txt .
+RUN pip install --upgrade pip && pip install -r requirements-train.txt
+
+COPY . .
+
+CMD ["sh", "scripts/reproduce.sh"]
