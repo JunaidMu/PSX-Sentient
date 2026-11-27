@@ -95,6 +95,8 @@ Class balance: DOWN 23.4%, NEUTRAL 53.4%, UP 23.2%.
 
 ## Deliverable 2 — End-to-End Production & Monitoring System
 
+**Live on AWS (EC2, ap-southeast-2):** [dashboard](http://3.104.86.72:8501) · [API docs](http://3.104.86.72:8000/docs) · [Grafana](http://3.104.86.72:3000/d/psx-sentient) · [MLflow](http://3.104.86.72:5000) · [Prometheus](http://3.104.86.72:9090)
+
 ```
 psxdata API + Yahoo/FRED ──► fetch_new_batch (Jul–Nov 2026, DVC data v2) ──► same cleaning + features
                                                                                    │

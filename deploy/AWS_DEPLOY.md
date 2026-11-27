@@ -71,5 +71,8 @@ writes the pre-market snapshot the API and dashboard use, versions the raw files
 `DAGSHUB_USER`, `DAGSHUB_TOKEN` (pipeline + gate), `EC2_HOST` (public IP), `EC2_USER` (`ubuntu`),
 `EC2_SSH_KEY` (contents of the `.pem`). Pushes to `main` deploy only after tests, validation and the gate pass.
 
+Live deployment (this project): API http://3.104.86.72:8000/docs · dashboard http://3.104.86.72:8501 ·
+Grafana http://3.104.86.72:3000 · MLflow http://3.104.86.72:5000 · Prometheus http://3.104.86.72:9090 (region ap-southeast-2).
+
 ## Cost
 m7i-flex.large ≈ US$0.10/hour (~$2.3/day) from the free-plan credits. **Stop the instance after grading.**
