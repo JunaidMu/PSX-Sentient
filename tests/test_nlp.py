@@ -120,6 +120,9 @@ def test_finbert_cpu_enforcement_and_scoring() -> None:
     with pytest.raises(ValueError, match="strictly on CPU"):
         FinBERTSentimentEngine(device="cuda")
 
+    # FinBERT scoring needs the optional NLP extras (requirements-nlp.txt)
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
     engine = FinBERTSentimentEngine(device="cpu")
     sample_df = pd.DataFrame(
         [

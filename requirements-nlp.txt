@@ -1,0 +1,4 @@
+# Optional: live FinBERT headline scoring (ENABLE_NLP=1). CPU-only torch wheels:
+#   pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-nlp.txt
+torch>=2.4.0
+transformers>=4.46.0

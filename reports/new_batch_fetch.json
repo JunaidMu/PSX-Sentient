@@ -1,0 +1,41 @@
+{
+  "history_cutoff": "2026-06-30",
+  "new_batch_range": [
+    "2026-07-01",
+    "2026-11-25"
+  ],
+  "rows": 3090,
+  "symbols": 30,
+  "overlap_max_price_mismatch": 0.0,
+  "dropped_incomplete_sessions": [
+    "2026-11-26"
+  ],
+  "macro_sources": {
+    "brent_close": {
+      "source": "yahoo:BZ=F",
+      "overlap_mismatch": 0.0,
+      "candidates": {
+        "yahoo:BZ=F": 0.0,
+        "fred:DCOILBRENTEU": 0.02461,
+        "yahoo:BNO": 0.44834
+      }
+    },
+    "usdpkr_close": {
+      "source": "yahoo:PKR=X",
+      "overlap_mismatch": 0.0,
+      "candidates": {
+        "yahoo:PKR=X": 0.0
+      }
+    },
+    "dxy_close": {
+      "source": "fred:DTWEXBGS",
+      "overlap_mismatch": 0.0,
+      "candidates": {
+        "fred:DTWEXBGS": 0.0,
+        "yahoo:DX-Y.NYB": 0.16497,
+        "yahoo:DX=F": "error: 'Index' object has no attribute 'date'"
+      }
+    }
+  },
+  "missing_macro_cells": 0
+}

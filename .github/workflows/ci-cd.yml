@@ -1,0 +1,85 @@
+name: PSX-Sentient CI/CD (eval-gated)
+
+# Every pull request: unit tests -> data validation -> retrain with the PR's code -> model-evaluation
+# gate on the fixed Test_2026 set. A model worse than the production benchmark fails the gate, and
+# deployment (push to main) only runs after every job, including the gate, has passed.
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  PYTHONPATH: "."
+  MLFLOW_DISABLE_AGENT_HINT: "1"
+  PYTHONWARNINGS: "ignore"
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+
+  validate-train-gate:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    env:
+      DAGSHUB_USER: ${{ secrets.DAGSHUB_USER }}
+      DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Pull versioned data from DagsHub (DVC)
+        run: |
+          test -n "$DAGSHUB_TOKEN" || { echo "::error::Add DAGSHUB_USER / DAGSHUB_TOKEN repository secrets"; exit 1; }
+          dvc remote modify origin --local auth basic
+          dvc remote modify origin --local user "$DAGSHUB_USER"
+          dvc remote modify origin --local password "$DAGSHUB_TOKEN"
+          dvc pull psx_historical_data/stocks_with_macro.csv.dvc psx_historical_data/new_batch/stocks_with_macro_new.csv.dvc
+      - name: Data validation + retrain (dvc repro)
+        run: dvc repro --force
+      - name: Model-evaluation gate (fixed Test_2026 vs production benchmark)
+        run: python -m src.monitoring.gate
+      - name: Upload validation, metrics and gate reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-reports
+          path: |
+            reports/*.json
+            models/*_metrics.json
+
+  deploy:
+    needs: validate-train-gate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+    steps:
+      - name: Deploy to AWS EC2 (git pull + docker compose up)
+        if: env.EC2_HOST != ''
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/PSX-Sentient
+            git pull --ff-only
+            docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d --build
+            sleep 20
+            curl -fs -X POST http://localhost:8000/model/reload
+      - name: Skip deploy (EC2 secrets not configured)
+        if: env.EC2_HOST == ''
+        run: echo "EC2_HOST secret not set - deployment skipped."

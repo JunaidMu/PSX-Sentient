@@ -1,0 +1,6 @@
+{
+  "macro_f1": 0.3972,
+  "active_signal_precision": 0.2853,
+  "model": "CatBoost",
+  "test_set": "Test_2026"
+}

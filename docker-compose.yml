@@ -1,28 +1,107 @@
-version: "3.9"
+# PSX-Sentient production stack (Deliverable 2)
+#
+#   docker compose build
+#   docker compose run --rm trainer sh scripts/bootstrap.sh   # first time: data, training, registry
+#   docker compose up -d                                      # api, dashboard, mlflow, prometheus, grafana
+#   docker compose run --rm trainer python -m src.monitoring.loop --skip-fetch   # drift -> retrain loop
+#
+# Ports: 8000 API (/docs, /metrics) · 8501 dashboard · 5000 MLflow · 9090 Prometheus · 3000 Grafana
+# The repo directory is mounted at /app so data, models and reports are shared by every service.
+# On AWS add the CloudWatch logging override:  docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d
+
+x-app: &app
+  image: psx-sentient:latest
+  build:
+    context: .
+    args:
+      INSTALL_NLP: ${INSTALL_NLP:-false}
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    MLFLOW_TRACKING_URI: http://mlflow:5000
+    PREDICTION_LOG: /app/logs/predictions.jsonl
+  volumes:
+    - ./:/app
+  restart: unless-stopped
 
 services:
-  fastapi:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: psx-sentient-api
+  mlflow:
+    <<: *app
+    command: >
+      mlflow server --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////app/mlflow_server/mlflow.db
+      --artifacts-destination ${MLFLOW_ARTIFACTS_DESTINATION:-/app/mlflow_server/artifacts}
+      --serve-artifacts
+      --allowed-hosts "*"
+    environment:
+      MLFLOW_TRACKING_URI: ""
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:5000/health"]
+      interval: 15s
+      retries: 10
+
+  api:
+    <<: *app
     command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
-    volumes:
-      - ./models:/app/models
-    restart: unless-stopped
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8000/health"]
+      interval: 30s
+      start_period: 60s
+      retries: 5
 
-  streamlit:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: psx-sentient-dashboard
-    command: streamlit run src/api/app.py --server.port 8501 --server.address 0.0.0.0
+  ui:
+    <<: *app
+    command: streamlit run src/api/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+    environment:
+      API_URL: http://api:8000
+      GRAFANA_URL: ${PUBLIC_GRAFANA_URL:-}
+      MLFLOW_URL: ${PUBLIC_MLFLOW_URL:-}
     ports:
       - "8501:8501"
-    volumes:
-      - ./models:/app/models
     depends_on:
-      - fastapi
+      - api
+
+  trainer:
+    <<: *app
+    profiles: ["jobs"]
+    restart: "no"
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      API_URL: http://api:8000
+      PREDICTION_LOG: /app/logs/predictions.jsonl
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    command: ["python", "-m", "src.monitoring.loop", "--skip-fetch"]
+
+  prometheus:
+    image: prom/prometheus:v2.53.2
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-psx-sentient}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
     restart: unless-stopped

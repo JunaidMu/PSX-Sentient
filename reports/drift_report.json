@@ -1,0 +1,222 @@
+{
+  "reference_rows": 65404,
+  "current_rows": 1203,
+  "current_range": [
+    "2026-07-01",
+    "2026-11-25"
+  ],
+  "drifted_market_features": [
+    "macd_hist",
+    "atr_14_pct",
+    "bb_width_20",
+    "close_to_sma50",
+    "brent_ret_1d",
+    "brent_ret_5d",
+    "usdpkr_ret_1d",
+    "usdpkr_ret_5d",
+    "dxy_ret_1d",
+    "dxy_ret_5d"
+  ],
+  "drift_share": 0.5,
+  "prediction_class_psi": 0.1117,
+  "retrain_recommended": true,
+  "thresholds": {
+    "psi": 0.2,
+    "ks_pvalue": 0.01,
+    "ks_min_stat": 0.1,
+    "drift_share_trigger": 0.25,
+    "prediction_psi_trigger": 0.1
+  },
+  "features": {
+    "ret_1d": {
+      "psi": 0.0249,
+      "ks_stat": 0.0543,
+      "ks_pvalue": 0.001822529058775938,
+      "drifted": false,
+      "calendar": false
+    },
+    "ret_2d": {
+      "psi": 0.0124,
+      "ks_stat": 0.0263,
+      "ks_pvalue": 0.38186849064316863,
+      "drifted": false,
+      "calendar": false
+    },
+    "ret_3d": {
+      "psi": 0.0361,
+      "ks_stat": 0.0445,
+      "ks_pvalue": 0.01806628243244458,
+      "drifted": false,
+      "calendar": false
+    },
+    "ret_5d": {
+      "psi": 0.0621,
+      "ks_stat": 0.061,
+      "ks_pvalue": 0.0002874695385850839,
+      "drifted": false,
+      "calendar": false
+    },
+    "ret_10d": {
+      "psi": 0.0815,
+      "ks_stat": 0.0788,
+      "ks_pvalue": 7.988641226077478e-07,
+      "drifted": false,
+      "calendar": false
+    },
+    "ret_20d": {
+      "psi": 0.1373,
+      "ks_stat": 0.0915,
+      "ks_pvalue": 4.687288532278111e-09,
+      "drifted": false,
+      "calendar": false
+    },
+    "vol_20d": {
+      "psi": 0.0458,
+      "ks_stat": 0.0599,
+      "ks_pvalue": 0.00040107629211617944,
+      "drifted": false,
+      "calendar": false
+    },
+    "rsi_14": {
+      "psi": 0.0696,
+      "ks_stat": 0.0583,
+      "ks_pvalue": 0.000617731980016348,
+      "drifted": false,
+      "calendar": false
+    },
+    "macd_hist": {
+      "psi": 0.3002,
+      "ks_stat": 0.1718,
+      "ks_pvalue": 5.987700331111189e-31,
+      "drifted": true,
+      "calendar": false
+    },
+    "atr_14_pct": {
+      "psi": 0.1182,
+      "ks_stat": 0.1225,
+      "ks_pvalue": 6.579019322817417e-16,
+      "drifted": true,
+      "calendar": false
+    },
+    "bb_width_20": {
+      "psi": 0.1264,
+      "ks_stat": 0.1247,
+      "ks_pvalue": 1.8596799282464805e-16,
+      "drifted": true,
+      "calendar": false
+    },
+    "close_to_sma20": {
+      "psi": 0.105,
+      "ks_stat": 0.0901,
+      "ks_pvalue": 8.414200190210964e-09,
+      "drifted": false,
+      "calendar": false
+    },
+    "close_to_sma50": {
+      "psi": 0.6505,
+      "ks_stat": 0.2185,
+      "ks_pvalue": 5.618302781789822e-50,
+      "drifted": true,
+      "calendar": false
+    },
+    "vol_shock_20": {
+      "psi": 0.0676,
+      "ks_stat": 0.0663,
+      "ks_pvalue": 5.9539797264242845e-05,
+      "drifted": false,
+      "calendar": false
+    },
+    "brent_ret_1d": {
+      "psi": 0.445,
+      "ks_stat": 0.1912,
+      "ks_pvalue": 2.878538532257807e-38,
+      "drifted": true,
+      "calendar": false
+    },
+    "brent_ret_5d": {
+      "psi": 1.7071,
+      "ks_stat": 0.3688,
+      "ks_pvalue": 1.4409664219689158e-144,
+      "drifted": true,
+      "calendar": false
+    },
+    "usdpkr_ret_1d": {
+      "psi": 0.5808,
+      "ks_stat": 0.1256,
+      "ks_pvalue": 1.0842092605388166e-16,
+      "drifted": true,
+      "calendar": false
+    },
+    "usdpkr_ret_5d": {
+      "psi": 1.8678,
+      "ks_stat": 0.2606,
+      "ks_pvalue": 3.0003274346807272e-71,
+      "drifted": true,
+      "calendar": false
+    },
+    "dxy_ret_1d": {
+      "psi": 0.7929,
+      "ks_stat": 0.1563,
+      "ks_pvalue": 1.1365253445412445e-25,
+      "drifted": true,
+      "calendar": false
+    },
+    "dxy_ret_5d": {
+      "psi": 1.2163,
+      "ks_stat": 0.2913,
+      "ks_pvalue": 2.8204710096754904e-89,
+      "drifted": true,
+      "calendar": false
+    },
+    "month_sin": {
+      "psi": 7.1063,
+      "ks_stat": 0.5677,
+      "ks_pvalue": 0.0,
+      "drifted": true,
+      "calendar": true
+    },
+    "month_cos": {
+      "psi": 7.1057,
+      "ks_stat": 0.6669,
+      "ks_pvalue": 0.0,
+      "drifted": true,
+      "calendar": true
+    },
+    "dow_sin": {
+      "psi": 0.0051,
+      "ks_stat": 0.0231,
+      "ks_pvalue": 0.5489123578341906,
+      "drifted": false,
+      "calendar": true
+    },
+    "dow_cos": {
+      "psi": 0.0051,
+      "ks_stat": 0.0248,
+      "ks_pvalue": 0.45663574860830713,
+      "drifted": false,
+      "calendar": true
+    },
+    "is_earnings_month": {
+      "psi": 0.2202,
+      "ks_stat": 0.2316,
+      "ks_pvalue": 3.5758244846988576e-56,
+      "drifted": true,
+      "calendar": true
+    },
+    "is_winter_gas": {
+      "psi": 1.7097,
+      "ks_stat": 0.3245,
+      "ks_pvalue": 3.598405704045007e-111,
+      "drifted": true,
+      "calendar": true
+    },
+    "is_monsoon": {
+      "psi": 6.2698,
+      "ks_stat": 0.8275,
+      "ks_pvalue": 0.0,
+      "drifted": true,
+      "calendar": true
+    }
+  },
+  "html_report": "reports\\drift_report.html"
+}

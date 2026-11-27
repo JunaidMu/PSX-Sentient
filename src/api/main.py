@@ -1,15 +1,22 @@
-"""FastAPI Service for PSX-Sentient (Phase 6).
+"""PSX-Sentient serving API (Deliverable 2).
 
-Exposes:
-- GET /health
-- GET /signals/latest
-- GET /ablation
-- POST /predict/{symbol}
+Serves the MLflow-registry `champion` with confidence scores, SHAP explanations and the late-fusion
+conflict-veto overlay; exposes Prometheus metrics and live input/prediction drift checks.
+
+Endpoints
+- GET  /                 service info
+- GET  /health           liveness + served model + data coverage
+- GET  /model            served model info;  POST /model/reload  re-read the registry `champion`
+- POST /predict          predict for {symbol, date} from the feature store, or for raw `features`
+- GET  /signals/latest   predictions for all 30 stocks on the latest trading day
+- GET  /drift            latest drift report;  POST /drift/check  drift of recently served inputs
+- GET  /metrics          Prometheus metrics (latency, errors, predictions, drift)
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -18,199 +25,196 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException
+from prometheus_client import Counter, Gauge, Histogram
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
 
-from src.data.live_updater import (
-    LATEST_SIGNALS_JSON_PATH,
-    compute_whale_block_metric,
-    generate_latest_signals_snapshot,
-)
-from src.fusion.late_fusion import ABLATION_METRICS_PATH, apply_late_fusion_row
-from src.models.train_baseline import MODELS_DIR
+from src.api.serving import CHAMPION, FEATURES, log_prediction, predict_features, read_prediction_log
+from src.features.build_features import FEATURE_COLUMNS
 from src.nlp.entity_mapper import KSE30_SYMBOLS
 
-MODEL_COMPARISON_PATH = MODELS_DIR / "model_comparison_metrics.json"
+ENABLE_NLP = os.environ.get("ENABLE_NLP", "0") == "1"
+DRIFT_REPORT = Path("reports/drift_report.json")
+RETRAIN_DECISION = Path("reports/retrain_decision.json")
+MIN_ROWS_FOR_DRIFT = 150
 
 app = FastAPI(
     title="PSX-Sentient API",
-    description=(
-        "Regime-Adaptive Late-Fusion Stock Movement & Sentiment Engine for 30 KSE-100 Equities "
-        "(CatBoost + CPU FinBERT + Conflict Veto Gate + Off-Market Whale Block Detector)."
-    ),
-    version="1.0.0",
+    description="Next-day DOWN/NEUTRAL/UP signals for 30 KSE-100 stocks with SHAP explanations, "
+    "a news-sentiment conflict veto, Prometheus metrics and drift monitoring.",
+    version="2.0.0",
 )
+Instrumentator(excluded_handlers=["/metrics"]).instrument(app).expose(app, include_in_schema=False)
+
+PREDICTIONS = Counter("psx_predictions_total", "Predictions served", ["model_signal", "final_signal"])
+VETOES = Counter("psx_veto_total", "Predictions neutralised by the conflict veto gate")
+CONFIDENCE = Histogram("psx_prediction_confidence", "Top-class probability of served predictions",
+                       buckets=(0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7, 0.8, 1.0))
+MODEL_VERSION = Gauge("psx_model_version", "Registry version of the served champion")
+DRIFT_SHARE = Gauge("psx_drift_share", "Share of market features drifting vs. training data")
+FEATURE_PSI = Gauge("psx_feature_psi", "PSI of each feature vs. training data", ["feature"])
+PRED_PSI = Gauge("psx_prediction_class_psi", "PSI of the predicted-class mix vs. training")
+RETRAIN_FLAG = Gauge("psx_retrain_recommended", "1 when the drift rule recommends retraining")
 
 
 class PredictRequest(BaseModel):
-    """Optional override payload for real-time what-if or live inference on `/predict/{symbol}`."""
-
-    P_down: float | None = Field(default=None, ge=0.0, le=1.0)
-    P_neutral: float | None = Field(default=None, ge=0.0, le=1.0)
-    P_up: float | None = Field(default=None, ge=0.0, le=1.0)
-    S_t: float | None = Field(default=None, ge=-1.0, le=1.0)
-    headline: str | None = Field(default=None)
-    ndm_volume: float | None = Field(default=None, ge=0.0)
-    ndm_deal_rate: float | None = Field(default=None, ge=0.0)
-    ready_close: float | None = Field(default=None, gt=0.0)
-    vol_sma_20: float | None = Field(default=None, gt=0.0)
+    symbol: str | None = Field(default=None, description="One of the 30 KSE-100 symbols, e.g. OGDC")
+    date: str | None = Field(default=None, description="Trading date YYYY-MM-DD (default: latest)")
+    features: dict[str, float] | None = Field(default=None, description="Raw 27-feature vector (live input)")
+    sentiment: float | None = Field(default=None, ge=-1.0, le=1.0, description="News sentiment S_t in [-1, 1]")
+    headline: str | None = Field(default=None, description="Headline scored by FinBERT (needs ENABLE_NLP=1)")
 
 
-def _load_latest_signals_payload() -> dict[str, Any]:
-    """Load `models/latest_signals.json`, generating it on the fly if missing."""
-    if not LATEST_SIGNALS_JSON_PATH.exists():
-        generate_latest_signals_snapshot()
-    return json.loads(LATEST_SIGNALS_JSON_PATH.read_text(encoding="utf-8"))
+def _publish_model_version() -> None:
+    try:
+        MODEL_VERSION.set(float(CHAMPION.info.get("version", "nan")))
+    except ValueError:
+        MODEL_VERSION.set(0)
+
+
+def _publish_drift(report: dict[str, Any]) -> None:
+    DRIFT_SHARE.set(report["drift_share"])
+    RETRAIN_FLAG.set(1 if report["retrain_recommended"] else 0)
+    if report.get("prediction_class_psi") is not None:
+        PRED_PSI.set(report["prediction_class_psi"])
+    for name, f in report["features"].items():
+        FEATURE_PSI.labels(feature=name).set(f["psi"])
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    CHAMPION.load()
+    _publish_model_version()
+    if DRIFT_REPORT.exists():
+        _publish_drift(json.loads(DRIFT_REPORT.read_text(encoding="utf-8")))
 
 
 @app.get("/")
-async def root() -> dict[str, Any]:
-    """Root welcome endpoint with links to interactive documentation and API routes."""
+def root() -> dict[str, Any]:
     return {
         "service": "PSX-Sentient API",
-        "version": "1.0.0",
+        "version": app.version,
         "status": "ok",
-        "description": "Regime-Adaptive Late-Fusion Stock Movement & Sentiment Engine for 30 KSE-100 Equities",
-        "endpoints": {
-            "docs": "/docs",
-            "health": "/health",
-            "latest_signals": "/signals/latest",
-            "ablation_metrics": "/ablation",
-            "predict_symbol": "/predict/{symbol}",
-        },
+        "endpoints": {"docs": "/docs", "health": "/health", "model": "/model", "predict": "/predict",
+                      "latest_signals": "/signals/latest", "drift": "/drift", "metrics": "/metrics"},
     }
 
 
 @app.get("/health")
-async def health_check() -> dict[str, Any]:
-    """Return service health and frozen model metadata."""
-    payload = _load_latest_signals_payload()
+def health() -> dict[str, Any]:
+    CHAMPION.ensure_loaded()
+    df = FEATURES.df
     return {
         "status": "ok",
-        "service": "psx-sentient-api",
-        "model_name": payload.get("model_name", "CatBoost"),
-        "model_cutoff_date": payload.get("model_cutoff_date", "2026-06-30"),
-        "tracked_symbols_count": len(KSE30_SYMBOLS),
-        "latest_signals_ready": LATEST_SIGNALS_JSON_PATH.exists(),
+        "model": CHAMPION.info,
+        "symbols": int(df["symbol"].nunique()),
+        "data_range": [str(df["date"].min().date()), str(df["date"].max().date())],
+        "nlp_enabled": ENABLE_NLP,
     }
+
+
+@app.get("/model")
+def model_info() -> dict[str, Any]:
+    CHAMPION.ensure_loaded()
+    out: dict[str, Any] = {"served": CHAMPION.info}
+    if RETRAIN_DECISION.exists():
+        out["last_retraining"] = json.loads(RETRAIN_DECISION.read_text(encoding="utf-8"))
+    return out
+
+
+@app.post("/model/reload")
+def reload_model() -> dict[str, Any]:
+    info = CHAMPION.load()
+    _publish_model_version()
+    return {"reloaded": True, "served": info}
+
+
+def _sentiment_for(req: PredictRequest) -> float | None:
+    if req.sentiment is not None:
+        return req.sentiment
+    if req.headline:
+        if not ENABLE_NLP:
+            raise HTTPException(400, "Headline scoring needs ENABLE_NLP=1; pass `sentiment` instead.")
+        from src.nlp.finbert_engine import FinBERTSentimentEngine
+
+        return float(FinBERTSentimentEngine(device="cpu").score_texts([req.headline])["sentiment_score"].iloc[0])
+    return None
+
+
+@app.post("/predict")
+def predict(req: PredictRequest) -> dict[str, Any]:
+    if req.features is not None:
+        missing = [c for c in FEATURE_COLUMNS if c not in req.features]
+        if missing:
+            raise HTTPException(422, f"Missing features: {missing}")
+        features, meta = req.features, {"symbol": req.symbol, "date": req.date, "input": "raw_features"}
+    elif req.symbol:
+        sym = req.symbol.strip().upper()
+        if sym not in KSE30_SYMBOLS:
+            raise HTTPException(404, f"{sym} is not one of the 30 tracked KSE-100 stocks")
+        try:
+            row = FEATURES.row(sym, req.date)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        features = {c: float(row[c]) for c in FEATURE_COLUMNS}
+        meta = {"symbol": sym, "date": str(row["date"].date()), "input": "feature_store",
+                "close": float(row["close"]) if "close" in row else None}
+    else:
+        raise HTTPException(422, "Provide either `symbol` (+ optional `date`) or `features`.")
+
+    result = {**meta, **predict_features(features, sentiment=_sentiment_for(req))}
+    PREDICTIONS.labels(model_signal=result["model_signal"], final_signal=result["final_signal"]).inc()
+    CONFIDENCE.observe(result["confidence"])
+    if result["veto_triggered"]:
+        VETOES.inc()
+    log_prediction(result, features)
+    return result
+
+
+@app.get("/features/{symbol}")
+def features_for(symbol: str, date: str | None = None) -> dict[str, Any]:
+    """The stored 27-feature vector for a stock/date (starting point for live what-if inputs)."""
+    try:
+        row = FEATURES.row(symbol.strip().upper(), date)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"symbol": symbol.upper(), "date": str(row["date"].date()),
+            "features": {c: float(row[c]) for c in FEATURE_COLUMNS}}
 
 
 @app.get("/signals/latest")
-async def get_latest_signals() -> dict[str, Any]:
-    """Return all 30 KSE-100 stocks with probabilities, E_tech, S_t, W_ndm, C_t, veto_triggered, and signal."""
-    payload = _load_latest_signals_payload()
-    signals = payload.get("signals", [])
-    bullish_count = sum(1 for s in signals if s.get("signal") == "UP")
-    bearish_count = sum(1 for s in signals if s.get("signal") == "DOWN")
-    neutral_count = sum(1 for s in signals if s.get("signal") == "NEUTRAL")
-    veto_count = sum(1 for s in signals if s.get("veto_triggered") is True)
-    whale_count = sum(1 for s in signals if s.get("is_whale_block") is True)
-
-    return {
-        "model_cutoff_date": payload.get("model_cutoff_date", "2026-06-30"),
-        "model_name": payload.get("model_name", "CatBoost"),
-        "total_symbols": len(signals),
-        "summary": {
-            "active_signals": bullish_count + bearish_count,
-            "bullish_count": bullish_count,
-            "bearish_count": bearish_count,
-            "neutral_count": neutral_count,
-            "veto_count": veto_count,
-            "whale_block_count": whale_count,
-        },
-        "signals": signals,
-    }
+def latest_signals() -> dict[str, Any]:
+    date = FEATURES.latest_date()
+    rows = []
+    for sym in KSE30_SYMBOLS:
+        try:
+            row = FEATURES.row(sym, str(date.date()))
+        except KeyError:
+            continue
+        res = predict_features({c: float(row[c]) for c in FEATURE_COLUMNS}, top_k=3)
+        rows.append({"symbol": sym, "close": float(row["close"]), **res})
+    counts = {s: sum(r["final_signal"] == s for r in rows) for s in ("UP", "NEUTRAL", "DOWN")}
+    return {"date": str(date.date()), "model": CHAMPION.info, "summary": counts, "signals": rows}
 
 
-@app.get("/ablation")
-async def get_ablation_and_model_metrics() -> dict[str, Any]:
-    """Return Phase 3 model comparison metrics and Phase 5 Late-Fusion ablation metrics."""
-    if not MODEL_COMPARISON_PATH.exists():
-        raise HTTPException(status_code=404, detail="model_comparison_metrics.json not found")
-    if not ABLATION_METRICS_PATH.exists():
-        raise HTTPException(status_code=404, detail="ablation_metrics.json not found")
-
-    model_comp = json.loads(MODEL_COMPARISON_PATH.read_text(encoding="utf-8"))
-    ablation = json.loads(ABLATION_METRICS_PATH.read_text(encoding="utf-8"))
-    return {
-        "model_comparison": model_comp,
-        "ablation_study": ablation,
-    }
+@app.get("/drift")
+def drift_report() -> dict[str, Any]:
+    if not DRIFT_REPORT.exists():
+        raise HTTPException(404, "No drift report yet; POST /drift/check or run src.monitoring.drift")
+    return json.loads(DRIFT_REPORT.read_text(encoding="utf-8"))
 
 
-@app.post("/predict/{symbol}")
-async def predict_symbol(
-    symbol: str,
-    request: PredictRequest | None = Body(default=None),
-) -> dict[str, Any]:
-    """Run Late-Fusion + Conflict Veto + Off-Market Whale inference for one of the 30 KSE-100 symbols."""
-    sym_upper = symbol.strip().upper()
-    if sym_upper not in KSE30_SYMBOLS:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Symbol '{sym_upper}' is not in the 30 tracked KSE-100 stocks.",
-        )
+@app.post("/drift/check")
+def drift_check(last_n: int = 3000) -> dict[str, Any]:
+    """Compare the most recently *served* inputs with the champion's training distribution."""
+    from src.monitoring.drift import run_drift_check
 
-    payload = _load_latest_signals_payload()
-    base_map = {item["symbol"]: dict(item) for item in payload.get("signals", [])}
-    if sym_upper not in base_map:
-        raise HTTPException(status_code=404, detail=f"No snapshot record found for '{sym_upper}'.")
-
-    rec = base_map[sym_upper]
-    req = request or PredictRequest()
-
-    p_down = float(req.P_down if req.P_down is not None else rec["P_down"])
-    p_neutral = float(req.P_neutral if req.P_neutral is not None else rec["P_neutral"])
-    p_up = float(req.P_up if req.P_up is not None else rec["P_up"])
-
-    # Normalize probabilities if custom probabilities were passed
-    prob_sum = p_down + p_neutral + p_up
-    if prob_sum > 0:
-        p_down, p_neutral, p_up = p_down / prob_sum, p_neutral / prob_sum, p_up / prob_sum
-
-    # Determine sentiment S_t: score live headline via CPU FinBERT if provided without explicit S_t
-    if req.S_t is not None:
-        s_t = float(req.S_t)
-    elif req.headline:
-        from src.nlp.finbert_engine import FinBERTSentimentEngine
-
-        engine = FinBERTSentimentEngine(device="cpu")
-        scored = engine.score_texts([req.headline])
-        s_t = float(scored["sentiment_score"].iloc[0])
-        rec["latest_headline"] = req.headline
-    else:
-        s_t = float(rec["S_t"])
-
-    # Recompute Off-Market Whale metric if custom NDM parameters are supplied
-    if req.ndm_volume is not None and req.ndm_deal_rate is not None:
-        r_close = float(req.ready_close if req.ready_close is not None else rec["close"])
-        v_sma20 = float(req.vol_sma_20 if req.vol_sma_20 is not None else max(rec["ndm_volume"] * 10.0, 100000.0))
-        whale_res = compute_whale_block_metric(
-            ndm_volume=float(req.ndm_volume),
-            ndm_deal_rate=float(req.ndm_deal_rate),
-            ready_close=r_close,
-            vol_sma_20=v_sma20,
-        )
-        rec.update(whale_res)
-
-    fused = apply_late_fusion_row(
-        P_down=p_down,
-        P_neutral=p_neutral,
-        P_up=p_up,
-        S_t=s_t,
-    )
-
-    rec.update(
-        {
-            "P_down": round(float(fused["P_down"]), 4),
-            "P_neutral": round(float(fused["P_neutral"]), 4),
-            "P_up": round(float(fused["P_up"]), 4),
-            "E_tech": round(float(fused["E_tech"]), 4),
-            "S_t": round(float(fused["S_t"]), 4),
-            "C_t": round(float(fused["C_t"]), 4),
-            "veto_triggered": bool(fused["veto_triggered"]),
-            "signal_class": int(fused["fused_class"]),
-            "signal": str(fused["fused_signal"]),
-        }
-    )
-    return rec
+    served = read_prediction_log(last_n)
+    if len(served) < MIN_ROWS_FOR_DRIFT:
+        raise HTTPException(409, f"Need at least {MIN_ROWS_FOR_DRIFT} served predictions, have {len(served)}")
+    served["date"] = served["date"].fillna(served["ts"].str[:10])
+    CHAMPION.ensure_loaded()
+    report = run_drift_check(served, model=CHAMPION.model)
+    _publish_drift(report)
+    return {k: v for k, v in report.items() if k != "features"}

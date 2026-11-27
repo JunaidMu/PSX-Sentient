@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: psx-sentient
+    folder: PSX-Sentient
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

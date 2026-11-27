@@ -324,13 +324,20 @@ def _log_model(model_name: str, model: Any, X_example: pd.DataFrame) -> str:
 
 
 def _register_champion(model_uri: str, tags: dict[str, str]) -> dict[str, str]:
-    """Register the selected model and point the `champion` alias at the new version."""
+    """Register the selected model. It becomes `champion` only if the registry has none yet (first
+    bootstrap); otherwise it is registered as `candidate` and only the retraining comparison
+    (src.monitoring.retrain) or a deliberate promotion can move `champion`."""
     version = mlflow.register_model(model_uri, REGISTERED_MODEL_NAME)
     client = MlflowClient()
-    client.set_registered_model_alias(REGISTERED_MODEL_NAME, "champion", version.version)
+    try:
+        client.get_model_version_by_alias(REGISTERED_MODEL_NAME, "champion")
+        alias = "candidate"
+    except Exception:
+        alias = "champion"
+    client.set_registered_model_alias(REGISTERED_MODEL_NAME, alias, version.version)
     for key, value in tags.items():
         client.set_model_version_tag(REGISTERED_MODEL_NAME, version.version, key, value)
-    return {"name": REGISTERED_MODEL_NAME, "version": str(version.version), "alias": "champion"}
+    return {"name": REGISTERED_MODEL_NAME, "version": str(version.version), "alias": alias}
 
 
 def run_phase3_pipeline(

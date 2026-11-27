@@ -1,15 +1,14 @@
-"""Streamlit Institutional Dashboard for PSX-Sentient (Phase 6).
+"""PSX-Sentient Streamlit dashboard (Deliverable 2) — a thin client over the FastAPI service.
 
-Features:
-(a) Top KPI Cards: Active Signals, Bullish/Bearish Count, Conflict Vetoes, Test 2026 Active Precision (69.77%)
-(b) 30-Stock Actionable Signal Table with UP/DOWN/NEUTRAL badges and Veto/Whale indicators
-(c) Single-Stock Deep Dive (CatBoost probabilities, FinBERT sentiment + live headlines, Off-Market Whale block spread)
-(d) Model & Ablation Performance Tab
+Tabs: latest signals for all 30 stocks · predict & explain (SHAP, sentiment veto, live feature
+inputs) · monitoring (drift, served model, last retraining decision) · model performance.
+Set API_URL (default http://localhost:8000) and optionally GRAFANA_URL / MLFLOW_URL.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -18,302 +17,153 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
+import requests
 import streamlit as st
 
-from src.data.live_updater import LATEST_SIGNALS_JSON_PATH, generate_latest_signals_snapshot
-from src.fusion.late_fusion import ABLATION_METRICS_PATH, apply_late_fusion_row
-from src.models.train_baseline import MODELS_DIR
-
-MODEL_COMPARISON_PATH = MODELS_DIR / "model_comparison_metrics.json"
-
-
-def load_dashboard_data() -> tuple[dict, dict, dict]:
-    """Load latest 30-stock signals snapshot, Phase 3 model metrics, and Phase 5 ablation metrics."""
-    if not LATEST_SIGNALS_JSON_PATH.exists():
-        generate_latest_signals_snapshot()
-    signals_payload = json.loads(LATEST_SIGNALS_JSON_PATH.read_text(encoding="utf-8"))
-    model_metrics = (
-        json.loads(MODEL_COMPARISON_PATH.read_text(encoding="utf-8"))
-        if MODEL_COMPARISON_PATH.exists()
-        else {}
-    )
-    ablation_metrics = (
-        json.loads(ABLATION_METRICS_PATH.read_text(encoding="utf-8"))
-        if ABLATION_METRICS_PATH.exists()
-        else {}
-    )
-    return signals_payload, model_metrics, ablation_metrics
+API_URL = os.environ.get("API_URL", "http://localhost:8000").rstrip("/")
+GRAFANA_URL = os.environ.get("GRAFANA_URL", "")
+MLFLOW_URL = os.environ.get("MLFLOW_URL", "")
+SYMBOLS = ["AKBL", "ATRL", "BAFL", "BAHL", "DGKC", "FCCL", "FFC", "HBL", "HUBC", "INDU", "INIL", "KAPCO", "LUCK",
+           "MARI", "MCB", "MLCF", "MTL", "NBP", "NML", "NRL", "OGDC", "PIOC", "PKGS", "POL", "PPL", "PSO", "PTC",
+           "SNGP", "SSGC", "UBL"]
+BADGE = {"UP": "🟢 UP", "DOWN": "🔴 DOWN", "NEUTRAL": "⚪ NEUTRAL"}
 
 
-def _format_signal_badge(sig: str) -> str:
-    if sig == "UP":
-        return "🟢 UP (2)"
-    if sig == "DOWN":
-        return "🔴 DOWN (0)"
-    return "⚪ NEUTRAL (1)"
+def api_get(path: str) -> dict:
+    r = requests.get(f"{API_URL}{path}", timeout=120)
+    r.raise_for_status()
+    return r.json()
 
 
-def main() -> None:
-    st.set_page_config(
-        page_title="PSX-Sentient | KSE-100 Late-Fusion Intelligence",
-        page_icon="📈",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
+def api_post(path: str, payload: dict | None = None) -> dict:
+    r = requests.post(f"{API_URL}{path}", json=payload, timeout=120)
+    if r.status_code >= 400:
+        raise RuntimeError(r.json().get("detail", r.text))
+    return r.json()
 
-    st.markdown(
-        """
-        <style>
-        .stApp { background-color: #0b0f19; color: #e2e8f0; }
-        div[data-testid="stMetric"] {
-            background: linear-gradient(145deg, #111827, #1e293b);
-            border: 1px solid #334155;
-            border-radius: 10px;
-            padding: 14px 18px;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
 
-    signals_payload, model_metrics, ablation_metrics = load_dashboard_data()
-    df_signals = pd.DataFrame(signals_payload["signals"])
+def _load_json(path: str) -> dict:
+    p = PROJECT_ROOT / path
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
 
-    st.title("📈 PSX-Sentient — KSE-100 Late-Fusion & Conflict Veto Terminal")
-    st.caption(
-        f"Frozen Model Cutoff: **{signals_payload.get('model_cutoff_date', '2026-06-30')}** | "
-        f"Engine: **{signals_payload.get('model_name', 'CatBoost')} + CPU FinBERT (`ProsusAI/finbert`) + NDM Whale Detector**"
-    )
 
-    # (a) Top KPI Cards
-    bullish_cnt = int((df_signals["signal"] == "UP").sum())
-    bearish_cnt = int((df_signals["signal"] == "DOWN").sum())
-    active_cnt = bullish_cnt + bearish_cnt
-    veto_cnt = int(df_signals["veto_triggered"].sum())
+st.set_page_config(page_title="PSX-Sentient", page_icon="📈", layout="wide")
+st.title("📈 PSX-Sentient — next-day signals for 30 KSE-100 stocks")
 
-    ablation_c = (
-        ablation_metrics.get("strategies", {}).get("c_full_late_fusion_conflict_veto", {})
-    )
-    test_active_prec = float(ablation_c.get("active_signal_precision", 0.6977)) * 100.0
-    test_vetoes = int(ablation_c.get("veto_count", 71))
+try:
+    health = api_get("/health")
+except Exception as exc:
+    st.error(f"API not reachable at {API_URL}: {exc}")
+    st.stop()
 
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric(
-        "Active Directional Signals (30 Stocks)",
-        f"{active_cnt} / {len(df_signals)}",
-        f"{bullish_cnt} Bullish (UP) · {bearish_cnt} Bearish (DOWN)",
-    )
-    kpi2.metric(
-        "Bullish vs. Bearish Breadth",
-        f"{bullish_cnt} UP  |  {bearish_cnt} DOWN",
-        f"{int((df_signals['signal'] == 'NEUTRAL').sum())} Neutral / Gated",
-    )
-    kpi3.metric(
-        "Conflict Vetoes Triggered",
-        f"{veto_cnt} Live  ({test_vetoes} in Test_2026)",
-        "Hard Safety Gate: |E_tech| > 0.20 vs |S_t| > 0.50",
-    )
-    kpi4.metric(
-        "Test 2026 Active Signal Precision",
-        f"{test_active_prec:.2f}%",
-        "+37.12% vs. Tabular Argmax (32.65%)",
-    )
+m = health["model"]
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Served model", f"{m.get('model_type')} v{m.get('version')}", m.get("alias"))
+c2.metric("Stocks tracked", health["symbols"])
+c3.metric("Data through", health["data_range"][1])
+c4.metric("News sentiment (FinBERT)", "on" if health["nlp_enabled"] else "manual input")
+links = " · ".join(x for x in [f"[API docs]({API_URL}/docs)",
+                                f"[Grafana]({GRAFANA_URL})" if GRAFANA_URL else "",
+                                f"[MLflow]({MLFLOW_URL})" if MLFLOW_URL else ""] if x)
+st.caption(links)
 
-    st.divider()
+tab_sig, tab_pred, tab_mon, tab_perf = st.tabs(["Latest signals", "Predict & explain", "Monitoring", "Model performance"])
 
-    tab_signals, tab_deep_dive, tab_ablation = st.tabs(
-        [
-            "📊 (b) 30-Stock Actionable Signal Table",
-            "🔍 (c) Single-Stock Deep Dive & What-If Simulator",
-            "🧪 (d) Purged Walk-Forward & Ablation Performance",
-        ]
-    )
+with tab_sig:
+    data = api_get("/signals/latest")
+    st.subheader(f"Signals for the next session after {data['date']}")
+    rows = [{
+        "Symbol": s["symbol"], "Close": s["close"],
+        "P(DOWN)": s["probabilities"]["DOWN"], "P(NEUTRAL)": s["probabilities"]["NEUTRAL"], "P(UP)": s["probabilities"]["UP"],
+        "Model call": BADGE[s["model_signal"]], "Confidence": s["confidence"], "Final signal": BADGE[s["final_signal"]],
+        "Top driver": s["explanation"]["top_features"][0]["feature"],
+    } for s in data["signals"]]
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    st.caption("Model call = most likely class. Final signal = late-fusion rule: an UP/DOWN call needs net edge "
+               "|0.75·(P_up−P_down) + 0.25·S_t| > 0.20 and P(NEUTRAL) < 0.50, and is vetoed to NEUTRAL when "
+               "news sentiment strongly contradicts it.")
 
-    # (b) 30-Stock Actionable Signal Table
-    with tab_signals:
-        col_f1, col_f2 = st.columns([2, 2])
-        with col_f1:
-            sig_filter = st.multiselect(
-                "Filter by Final Signal",
-                options=["UP", "DOWN", "NEUTRAL"],
-                default=["UP", "DOWN", "NEUTRAL"],
-            )
-        with col_f2:
-            only_special = st.checkbox("Show only Active / Veto / Whale-Block Stocks", value=False)
-
-        view_df = df_signals[df_signals["signal"].isin(sig_filter)].copy()
-        if only_special:
-            view_df = view_df[
-                (view_df["signal"] != "NEUTRAL")
-                | (view_df["veto_triggered"])
-                | (view_df["is_whale_block"])
-            ]
-
-        view_df["Signal Badge"] = view_df["signal"].map(_format_signal_badge)
-        view_df["Conflict Veto"] = view_df["veto_triggered"].map(
-            lambda v: "🛡️ VETOED -> NEUTRAL" if v else "—"
-        )
-        view_df["Whale Block (NDM)"] = view_df.apply(
-            lambda r: (
-                f"🐋 {r['W_ndm']:+.2f} ({r['ndm_spread_pct']:+.1f}%)"
-                if r["is_whale_block"]
-                else "—"
-            ),
-            axis=1,
-        )
-
-        display_cols = [
-            "symbol",
-            "date",
-            "close",
-            "Signal Badge",
-            "P_down",
-            "P_neutral",
-            "P_up",
-            "E_tech",
-            "S_t",
-            "C_t",
-            "Conflict Veto",
-            "Whale Block (NDM)",
-            "latest_headline",
-        ]
-        st.dataframe(
-            view_df[display_cols],
-            width="stretch",
-            hide_index=True,
-        )
-
-    # (c) Single-Stock Deep Dive
-    with tab_deep_dive:
-        selected_sym = st.selectbox(
-            "Select KSE-100 Stock Symbol",
-            options=df_signals["symbol"].tolist(),
-            index=0,
-        )
-        stock_row = df_signals[df_signals["symbol"] == selected_sym].iloc[0]
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.subheader(f"1. CatBoost Probabilities ({selected_sym})")
-            st.write(f"**Snapshot Date:** `{stock_row['date']}` | **Ready Close:** `PKR {stock_row['close']:.2f}`")
-            st.progress(float(stock_row["P_up"]), text=f"P(UP): {stock_row['P_up']:.2%}")
-            st.progress(float(stock_row["P_neutral"]), text=f"P(NEUTRAL): {stock_row['P_neutral']:.2%}")
-            st.progress(float(stock_row["P_down"]), text=f"P(DOWN): {stock_row['P_down']:.2%}")
-            st.metric("Net Technical Edge (E_tech = P_up - P_down)", f"{stock_row['E_tech']:+.4f}")
-
-        with c2:
-            st.subheader("2. FinBERT Sentiment & Conflict Gate")
-            st.metric("3-Day EWMA FinBERT Score (S_t)", f"{stock_row['S_t']:+.4f}")
-            st.metric("Blended Conviction (C_t = 0.75*E_tech + 0.25*S_t)", f"{stock_row['C_t']:+.4f}")
-            st.info(f"**Latest Mapped Headline:**\n\n{stock_row['latest_headline']}")
-            if stock_row["veto_triggered"]:
-                st.warning("🛡️ **Conflict Veto Gate Triggered!** Signal forced to **NEUTRAL**.")
-            else:
-                st.success(f"**Final Late-Fusion Signal:** {_format_signal_badge(stock_row['signal'])}")
-
-        with c3:
-            st.subheader("3. Off-Market Whale Block (NDM)")
-            st.metric("Whale Block Score (W_ndm)", f"{stock_row['W_ndm']:+.4f}")
-            st.write(f"- **Institutional Block Flag (>5% 20d Vol):** `{bool(stock_row['is_whale_block'])}`")
-            st.write(f"- **NDM Block Volume:** `{int(stock_row['ndm_volume']):,}` (`{stock_row['ndm_vol_pct_of_sma20']:.1f}%` of 20d SMA)")
-            st.write(f"- **NDM Deal Rate vs. Ready Close:** `PKR {stock_row['ndm_deal_rate']:.2f}` (`{stock_row['ndm_spread_pct']:+.2f}%` spread)")
-
-        st.markdown("#### Interactive What-If Late-Fusion Simulator")
-        sim_col1, sim_col2 = st.columns(2)
-        with sim_col1:
-            sim_s_t = st.slider(
-                "Override 3-Day EWMA Sentiment (S_t)",
-                min_value=-1.0,
-                max_value=1.0,
-                value=float(stock_row["S_t"]),
-                step=0.05,
-            )
-        with sim_col2:
-            sim_out = apply_late_fusion_row(
-                P_down=float(stock_row["P_down"]),
-                P_neutral=float(stock_row["P_neutral"]),
-                P_up=float(stock_row["P_up"]),
-                S_t=sim_s_t,
-            )
-            st.write(
-                f"**Simulated Blended Score (`C_t`):** `{sim_out['C_t']:+.4f}` | "
-                f"**Veto Triggered:** `{sim_out['veto_triggered']}` | "
-                f"**Simulated Signal:** **{_format_signal_badge(sim_out['fused_signal'])}**"
-            )
-
-    # (d) Model & Ablation Performance Tab
-    with tab_ablation:
-        st.subheader("Phase 5: Test_2026 Ablation Comparison (Tabular-Only vs. Late-Fusion + Conflict Veto)")
-        if ablation_metrics and "strategies" in ablation_metrics:
-            strat_map = {
-                "a_tabular_argmax_baseline": "(a) Tabular Argmax Baseline",
-                "b_conviction_thresholded_tabular": "(b) Conviction-Thresholded Tabular (|E_tech| > 0.20)",
-                "c_full_late_fusion_conflict_veto": "(c) Full Late-Fusion + Conflict Veto Gate",
-            }
-            ab_rows = []
-            for k, name in strat_map.items():
-                m = ablation_metrics["strategies"][k]
-                ab_rows.append(
-                    {
-                        "Strategy": name,
-                        "Macro F1": round(m["macro_f1"], 4),
-                        "Active Signal Precision": f"{m['active_signal_precision'] * 100:.2f}%",
-                        "Active Signal Rate": f"{m['active_signal_rate'] * 100:.2f}%",
-                        "Active Signals": m["active_signal_count"],
-                        "Conflict Vetoes": m["veto_count"],
-                        "P(Down)": f"{m['precision_down'] * 100:.2f}%",
-                        "P(Neutral)": f"{m['precision_neutral'] * 100:.2f}%",
-                        "P(Up)": f"{m['precision_up'] * 100:.2f}%",
-                    }
+with tab_pred:
+    left, right = st.columns([1, 2])
+    with left:
+        sym = st.selectbox("Stock", SYMBOLS, index=SYMBOLS.index("OGDC"))
+        date = st.text_input("Date (YYYY-MM-DD, blank = latest)", "")
+        sentiment = st.slider("News sentiment S_t (−1 very negative … +1 very positive)", -1.0, 1.0, 0.0, 0.05)
+        headline = st.text_input("…or a headline to score with FinBERT", "",
+                                 disabled=not health["nlp_enabled"])
+        live_edit = st.checkbox("Edit the input features (live what-if input)")
+        payload: dict = {"symbol": sym, "date": date or None}
+        if headline:
+            payload["headline"] = headline
+        elif sentiment != 0.0:
+            payload["sentiment"] = sentiment
+        if live_edit:
+            try:
+                stored = api_get(f"/features/{sym}" + (f"?date={date}" if date else ""))
+                st.caption(f"Feature values for {sym} on {stored['date']} — change any value:")
+                edited = st.data_editor(
+                    pd.DataFrame({"value": stored["features"]}), width="stretch", key=f"edit_{sym}_{date}"
                 )
-            st.dataframe(pd.DataFrame(ab_rows), width="stretch", hide_index=True)
+                payload["features"] = {k: float(v) for k, v in edited["value"].items()}
+                payload["date"] = stored["date"]
+            except Exception as exc:
+                st.error(str(exc))
+        go = st.button("Predict", type="primary")
+    with right:
+        if go:
+            try:
+                res = api_post("/predict", payload)
+                res.setdefault("date", payload.get("date"))
+                st.markdown(f"### {sym} · {res['date']}: **{BADGE[res['final_signal']]}**")
+                if res["veto_triggered"]:
+                    st.warning("Conflict veto: the news sentiment contradicts the technical model, signal forced to NEUTRAL.")
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Model call", res["model_signal"])
+                k2.metric("Confidence", f"{res['confidence']:.1%}")
+                k3.metric("Net technical edge E_tech", f"{res['E_tech']:+.3f}")
+                k4.metric("Blended conviction C_t", f"{res['C_t']:+.3f}")
+                st.bar_chart(pd.Series(res["probabilities"]), horizontal=True)
+                st.markdown(f"**Why {res['explanation']['explained_class']}?** SHAP contributions (positive pushes towards it):")
+                shap_df = pd.DataFrame(res["explanation"]["top_features"]).set_index("feature")
+                st.bar_chart(shap_df["shap"], horizontal=True)
+                st.dataframe(shap_df, width="stretch")
+            except Exception as exc:
+                st.error(str(exc))
 
-        st.subheader("Phase 3: Purged Walk-Forward (2023–2025) & Holdout (2026) Baseline Comparison")
-        if model_metrics and "models" in model_metrics:
-            m_rows = []
-            for m_name, m_info in model_metrics["models"].items():
-                for split_key in ("Val_2023", "Val_2024", "Val_2025"):
-                    fm = m_info["folds"][split_key]
-                    m_rows.append(
-                        {
-                            "Model": m_name,
-                            "Split": split_key,
-                            "Macro F1": round(fm["macro_f1"], 4),
-                            "Active Signal Precision": f"{fm['active_signal_precision'] * 100:.2f}%",
-                            "Active Signal Rate": f"{fm['active_signal_rate'] * 100:.2f}%",
-                            "P(Down)": round(fm["precision_down"], 4),
-                            "P(Neutral)": round(fm["precision_neutral"], 4),
-                            "P(Up)": round(fm["precision_up"], 4),
-                        }
-                    )
-                vm = m_info["val_mean"]
-                m_rows.append(
-                    {
-                        "Model": m_name,
-                        "Split": "Val_Mean",
-                        "Macro F1": round(vm["macro_f1"], 4),
-                        "Active Signal Precision": f"{vm['active_signal_precision'] * 100:.2f}%",
-                        "Active Signal Rate": f"{vm['active_signal_rate'] * 100:.2f}%",
-                        "P(Down)": round(vm["precision_down"], 4),
-                        "P(Neutral)": round(vm["precision_neutral"], 4),
-                        "P(Up)": round(vm["precision_up"], 4),
-                    }
-                )
-                tm = m_info["test_2026"]
-                m_rows.append(
-                    {
-                        "Model": m_name,
-                        "Split": "Test_2026",
-                        "Macro F1": round(tm["macro_f1"], 4),
-                        "Active Signal Precision": f"{tm['active_signal_precision'] * 100:.2f}%",
-                        "Active Signal Rate": f"{tm['active_signal_rate'] * 100:.2f}%",
-                        "P(Down)": round(tm["precision_down"], 4),
-                        "P(Neutral)": round(tm["precision_neutral"], 4),
-                        "P(Up)": round(tm["precision_up"], 4),
-                    }
-                )
-            st.dataframe(pd.DataFrame(m_rows), width="stretch", hide_index=True)
+with tab_mon:
+    try:
+        drift = api_get("/drift")
+        d1, d2, d3 = st.columns(3)
+        d1.metric("Market features drifting", f"{drift['drift_share']:.0%}")
+        d2.metric("Prediction class-mix PSI", drift.get("prediction_class_psi"))
+        d3.metric("Retraining recommended", "YES" if drift["retrain_recommended"] else "no")
+        st.caption(f"Window {drift['current_range'][0]} → {drift['current_range'][1]} ({drift['current_rows']:,} rows) vs training data.")
+        feats = pd.DataFrame(drift["features"]).T.sort_values("psi", ascending=False)
+        st.dataframe(feats, width="stretch")
+    except Exception as exc:
+        st.info(f"No drift report yet ({exc}).")
+    info = api_get("/model")
+    st.subheader("Served model & last retraining")
+    st.json(info["served"])
+    if "last_retraining" in info:
+        lr = info["last_retraining"]
+        st.markdown(f"**Decision:** {lr['decision']} (champion v{lr['champion_before']} → v{lr['champion_after']}, "
+                    f"compared on {lr['compare_window'][0]} → {lr['compare_window'][1]})")
+        st.dataframe(pd.DataFrame({"champion": lr["champion_metrics"], "challenger": lr["challenger_metrics"]}).round(4),
+                     width="stretch")
 
-
-if __name__ == "__main__":
-    main()
+with tab_perf:
+    comp, base, stack = (_load_json("models/model_comparison_metrics.json"), _load_json("models/baseline_metrics.json"),
+                         _load_json("models/stacking_metrics.json"))
+    rows = []
+    for name, r in base.get("baselines", {}).items():
+        rows.append({"Model": name, "Type": "baseline", "Val F1": r["val_mean"]["macro_f1"],
+                     "Test 2026 F1": r["test_2026"]["macro_f1"], "Test active precision": r["test_2026"]["active_signal_precision"]})
+    for name, r in comp.get("models", {}).items():
+        rows.append({"Model": name, "Type": "primary", "Val F1": r["val_mean"]["macro_f1"],
+                     "Test 2026 F1": r["test_2026"]["macro_f1"], "Test active precision": r["test_2026"]["active_signal_precision"]})
+    if stack:
+        rows.append({"Model": "Stacking meta-learner", "Type": "late fusion", "Val F1": stack["val_mean"]["macro_f1"],
+                     "Test 2026 F1": stack["test_2026"]["macro_f1"], "Test active precision": stack["test_2026"]["active_signal_precision"]})
+    st.dataframe(pd.DataFrame(rows).round(4), hide_index=True, width="stretch")
+    st.caption("Test 2026 = Jan–Jun 2026, never used for model selection. Active precision = share of UP/DOWN calls that were right (≈23% by chance).")

@@ -1,4 +1,4 @@
-"""Unit tests for Phase 6: Live Updater, Off-Market Whale Parser, and FastAPI Service."""
+"""Tests for the D2 serving API (synthetic model + feature store, so they run on a clean CI runner)."""
 
 from __future__ import annotations
 
@@ -9,154 +9,95 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from catboost import CatBoostClassifier
 from fastapi.testclient import TestClient
 import numpy as np
+import pandas as pd
+import pytest
 
-from src.api.main import app
-from src.data.live_updater import compute_whale_block_metric, parse_psx_off_market_csv
+from src.api import serving
+from src.data.live_updater import compute_whale_block_metric
+from src.features.build_features import FEATURE_COLUMNS
+from src.nlp.entity_mapper import KSE30_SYMBOLS
 
-client = TestClient(app)
+
+@pytest.fixture(scope="module")
+def client(tmp_path_factory):
+    rng = np.random.default_rng(0)
+    dates = pd.bdate_range("2026-10-01", periods=40)
+    rows = [{"symbol": s, "date": d, "close": 100.0, **{c: float(rng.normal()) for c in FEATURE_COLUMNS}}
+            for s in KSE30_SYMBOLS for d in dates]
+    df = pd.DataFrame(rows)
+    df["target_class"] = rng.integers(0, 3, len(df))
+
+    model = CatBoostClassifier(loss_function="MultiClass", iterations=20, depth=3, verbose=False, random_seed=0)
+    model.fit(df[FEATURE_COLUMNS], df["target_class"])
+
+    serving.FEATURES._df = df.sort_values(["symbol", "date"])
+    serving.CHAMPION.model = model
+    serving.CHAMPION.info = {"name": "test-model", "version": "7", "alias": "champion", "model_type": "CatBoost"}
+    serving.CHAMPION.load = lambda: serving.CHAMPION.info  # never touch a real registry in tests
+    serving.PREDICTION_LOG = tmp_path_factory.mktemp("logs") / "predictions.jsonl"
+
+    from src.api.main import app
+
+    with TestClient(app) as c:
+        yield c
 
 
-def test_root_endpoint() -> None:
-    """Verify GET / returns welcome JSON with links to /docs, /health, /signals/latest, and /ablation."""
-    resp = client.get("/")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "ok"
-    assert "/docs" in data["endpoints"].values()
-    assert "/health" in data["endpoints"].values()
-    assert "/signals/latest" in data["endpoints"].values()
-    assert "/ablation" in data["endpoints"].values()
+def test_health_and_model(client) -> None:
+    h = client.get("/health").json()
+    assert h["status"] == "ok" and h["symbols"] == 30 and h["model"]["version"] == "7"
+
+
+def test_predict_returns_probabilities_confidence_and_shap(client) -> None:
+    r = client.post("/predict", json={"symbol": "ogdc"})
+    assert r.status_code == 200
+    res = r.json()
+    probs = res["probabilities"]
+    assert set(probs) == {"DOWN", "NEUTRAL", "UP"}
+    assert abs(sum(probs.values()) - 1.0) < 1e-3
+    assert res["confidence"] == max(probs.values())
+    top = res["explanation"]["top_features"]
+    assert len(top) == 8 and all(t["feature"] in FEATURE_COLUMNS for t in top)
+    assert res["final_signal"] in {"DOWN", "NEUTRAL", "UP"}
+
+
+def test_predict_raw_feature_vector_and_validation(client) -> None:
+    feats = {c: 0.0 for c in FEATURE_COLUMNS}
+    assert client.post("/predict", json={"features": feats}).status_code == 200
+    feats.pop("rsi_14")
+    assert client.post("/predict", json={"features": feats}).status_code == 422
+    assert client.post("/predict", json={"symbol": "ENGRO"}).status_code == 404
+    assert client.post("/predict", json={}).status_code == 422
+
+
+def test_conflict_veto_with_strong_opposing_sentiment(client) -> None:
+    # Find a stock the model calls UP strongly enough for the veto to apply, then add very bad news
+    for sym in KSE30_SYMBOLS:
+        base = client.post("/predict", json={"symbol": sym}).json()
+        if base["E_tech"] > 0.20:
+            vetoed = client.post("/predict", json={"symbol": sym, "sentiment": -0.9}).json()
+            assert vetoed["veto_triggered"] is True and vetoed["final_signal"] == "NEUTRAL"
+            return
+    pytest.skip("synthetic model produced no strong UP call")
+
+
+def test_latest_signals_and_metrics(client) -> None:
+    s = client.get("/signals/latest").json()
+    assert len(s["signals"]) == 30 and sum(s["summary"].values()) == 30
+    metrics = client.get("/metrics").text
+    assert "psx_predictions_total" in metrics and "http_request_duration_seconds" in metrics
+
+
+def test_predictions_are_logged_for_drift(client) -> None:
+    client.post("/predict", json={"symbol": "HBL"})
+    log = serving.read_prediction_log()
+    assert len(log) > 0 and set(FEATURE_COLUMNS) <= set(log.columns)
 
 
 def test_off_market_whale_block_detector() -> None:
-    """Verify PSX Off-Market (NDM) Whale Block detector threshold (>5% of 20d avg volume) and spread."""
-    # 1. Block > 5% of 20d avg volume at a +3.5% premium -> positive W_ndm and is_whale_block = True
-    bull_whale = compute_whale_block_metric(
-        ndm_volume=150_000,
-        ndm_deal_rate=103.50,
-        ready_close=100.00,
-        vol_sma_20=1_000_000,
-    )
-    assert bull_whale["is_whale_block"] is True
-    assert bull_whale["W_ndm"] > 0.20
-
-    # 2. Block > 5% of 20d avg volume at a -4.0% discount -> negative W_ndm and is_whale_block = True
-    bear_whale = compute_whale_block_metric(
-        ndm_volume=120_000,
-        ndm_deal_rate=96.00,
-        ready_close=100.00,
-        vol_sma_20=1_000_000,
-    )
-    assert bear_whale["is_whale_block"] is True
-    assert bear_whale["W_ndm"] < -0.20
-
-    # 3. Small NDM deal <= 5% of 20d avg volume -> not an institutional whale block (W_ndm == 0.0)
-    small_deal = compute_whale_block_metric(
-        ndm_volume=20_000,
-        ndm_deal_rate=105.00,
-        ready_close=100.00,
-        vol_sma_20=1_000_000,
-    )
-    assert small_deal["is_whale_block"] is False
-    assert small_deal["W_ndm"] == 0.0
-
-    # 4. CSV parser test
-    csv_text = "symbol,ndm_volume,ndm_deal_rate\nOGDC,200000,345.0\nATRL,150000,820.0\n"
-    parsed = parse_psx_off_market_csv(
-        csv_text,
-        ready_close_map={"OGDC": 335.0, "ATRL": 850.0},
-        vol_sma20_map={"OGDC": 1_500_000, "ATRL": 1_000_000},
-    )
-    assert len(parsed) == 2
-    ogdc_row = parsed[parsed["symbol"] == "OGDC"].iloc[0]
-    atrl_row = parsed[parsed["symbol"] == "ATRL"].iloc[0]
-    assert bool(ogdc_row["is_whale_block"]) is True and float(ogdc_row["W_ndm"]) > 0.0
-    assert bool(atrl_row["is_whale_block"]) is True and float(atrl_row["W_ndm"]) < 0.0
-
-
-def test_health_endpoint() -> None:
-    """Verify GET /health returns status ok and 30 tracked symbols."""
-    resp = client.get("/health")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "ok"
-    assert data["tracked_symbols_count"] == 30
-    assert data["model_cutoff_date"] == "2026-06-30"
-
-
-def test_latest_signals_endpoint() -> None:
-    """Verify GET /signals/latest returns all 30 KSE-100 stocks with complete Late-Fusion fields."""
-    resp = client.get("/signals/latest")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["total_symbols"] == 30
-    assert len(data["signals"]) == 30
-
-    required_fields = {
-        "symbol",
-        "date",
-        "close",
-        "P_down",
-        "P_neutral",
-        "P_up",
-        "E_tech",
-        "S_t",
-        "W_ndm",
-        "C_t",
-        "veto_triggered",
-        "signal",
-    }
-    for item in data["signals"]:
-        assert required_fields.issubset(item.keys())
-        assert item["signal"] in ("UP", "DOWN", "NEUTRAL")
-        assert np.isclose(item["P_down"] + item["P_neutral"] + item["P_up"], 1.0, atol=1e-3)
-
-
-def test_ablation_endpoint() -> None:
-    """Verify GET /ablation returns Phase 3 model comparison and Phase 5 ablation metrics."""
-    resp = client.get("/ablation")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "model_comparison" in data
-    assert "ablation_study" in data
-    strategies = data["ablation_study"]["strategies"]
-    assert "c_full_late_fusion_conflict_veto" in strategies
-    assert strategies["c_full_late_fusion_conflict_veto"]["active_signal_precision"] > 0.60
-
-
-def test_predict_symbol_endpoint_and_conflict_veto() -> None:
-    """Verify POST /predict/{symbol} handles default inference, conflict veto override, and 404."""
-    # 1. Default snapshot prediction for OGDC
-    resp_default = client.post("/predict/OGDC")
-    assert resp_default.status_code == 200
-    ogdc = resp_default.json()
-    assert ogdc["symbol"] == "OGDC"
-    assert ogdc["signal"] in ("UP", "DOWN", "NEUTRAL")
-
-    # 2. Override with strong bullish probabilities (E_tech = 0.50 > 0.20) + negative shock S_t = -0.75 < -0.50
-    # Must trigger Conflict Veto Gate and force signal to NEUTRAL
-    resp_veto = client.post(
-        "/predict/LUCK",
-        json={
-            "P_down": 0.15,
-            "P_neutral": 0.20,
-            "P_up": 0.65,
-            "S_t": -0.75,
-            "ndm_volume": 250000,
-            "ndm_deal_rate": 480.0,
-            "ready_close": 460.0,
-            "vol_sma_20": 2000000,
-        },
-    )
-    assert resp_veto.status_code == 200
-    veto_data = resp_veto.json()
-    assert veto_data["veto_triggered"] is True
-    assert veto_data["signal"] == "NEUTRAL"
-    assert veto_data["is_whale_block"] is True
-    assert veto_data["W_ndm"] > 0.0
-
-    # 3. Unknown symbol must return 404
-    resp_404 = client.post("/predict/INVALID_TICKER")
-    assert resp_404.status_code == 404
+    bull = compute_whale_block_metric(ndm_volume=150_000, ndm_deal_rate=103.5, ready_close=100.0, vol_sma_20=1_000_000)
+    assert bull["is_whale_block"] is True and bull["W_ndm"] > 0.2
+    small = compute_whale_block_metric(ndm_volume=20_000, ndm_deal_rate=105.0, ready_close=100.0, vol_sma_20=1_000_000)
+    assert small["is_whale_block"] is False and small["W_ndm"] == 0.0

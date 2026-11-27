@@ -66,3 +66,15 @@ stages:
     metrics:
       - models/model_comparison_metrics.json:
           cache: false
+
+  stacking:
+    cmd: python -m src.models.stacking
+    deps:
+      - models/val_oof_predictions.parquet
+      - models/all_models_test_2026_predictions.parquet
+      - src/models/stacking.py
+    outs:
+      - models/stacking_meta.pkl
+    metrics:
+      - models/stacking_metrics.json:
+          cache: false

@@ -1,0 +1,19 @@
+# AWS override: ship every container's logs to Amazon CloudWatch Logs.
+#   docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d
+# Needs an EC2 instance role with CloudWatch Logs write access (see deploy/AWS_DEPLOY.md).
+x-cloudwatch: &cloudwatch
+  logging:
+    driver: awslogs
+    options:
+      awslogs-region: ${AWS_REGION:-us-east-1}
+      awslogs-group: psx-sentient
+      awslogs-create-group: "true"
+      tag: "{{.Name}}"
+
+services:
+  mlflow: *cloudwatch
+  api: *cloudwatch
+  ui: *cloudwatch
+  trainer: *cloudwatch
+  prometheus: *cloudwatch
+  grafana: *cloudwatch

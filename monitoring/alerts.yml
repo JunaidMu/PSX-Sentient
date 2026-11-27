@@ -1,0 +1,35 @@
+groups:
+  - name: psx-sentient
+    rules:
+      - alert: InputDriftDetected
+        expr: psx_retrain_recommended == 1
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Input/prediction drift: retraining recommended"
+          description: "The drift rule (>=25% of market features drifting or class-mix PSI >= 0.1) fired; run the retraining loop."
+
+      - alert: HighErrorRate
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(http_requests_total[5m])), 1e-9) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API 5xx error rate above 5%"
+
+      - alert: SlowPredictions
+        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{handler="/predict"}[5m])) by (le)) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 /predict latency above 500 ms"
+
+      - alert: ApiDown
+        expr: up{job="psx-sentient-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PSX-Sentient API is not responding to Prometheus scrapes"

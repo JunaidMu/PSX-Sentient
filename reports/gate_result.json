@@ -1,0 +1,19 @@
+{
+  "test_set": "Test_2026 (2026-01-01 -> 2026-06-29)",
+  "candidate_model": "CatBoost",
+  "checks": {
+    "macro_f1": {
+      "candidate": 0.3972,
+      "benchmark": 0.3972,
+      "floor": 0.3922,
+      "passed": true
+    },
+    "active_signal_precision": {
+      "candidate": 0.2853,
+      "benchmark": 0.2853,
+      "floor": 0.2753,
+      "passed": true
+    }
+  },
+  "passed": true
+}

@@ -1,5 +1,5 @@
 [core]
     remote = origin
-    autostage = true
+    autostage = false
 ['remote "origin"']
     url = https://dagshub.com/JunaidMu/PSX-Sentient.dvc

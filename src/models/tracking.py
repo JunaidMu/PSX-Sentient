@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 from typing import Any
@@ -17,11 +18,18 @@ RAW_DATA_PATH = Path("psx_historical_data/stocks_with_macro.csv")
 CLEAN_DATA_PATH = Path("psx_historical_data/stocks_clean.csv")
 
 
-def setup_mlflow(mlruns_dir: Path = MLRUNS_DIR, experiment: str = EXPERIMENT_NAME) -> None:
-    """Point MLflow at the local SQLite store (tracking + model registry) and select the experiment."""
+def tracking_uri(mlruns_dir: Path = MLRUNS_DIR) -> str:
+    """`MLFLOW_TRACKING_URI` if set (e.g. the MLflow server on EC2), else the local SQLite store."""
+    env_uri = os.environ.get("MLFLOW_TRACKING_URI")
+    if env_uri:
+        return env_uri
     mlruns_dir.mkdir(parents=True, exist_ok=True)
-    db_path = (mlruns_dir / "mlflow.db").resolve().as_posix()
-    mlflow.set_tracking_uri(f"sqlite:///{db_path}")
+    return f"sqlite:///{(mlruns_dir / 'mlflow.db').resolve().as_posix()}"
+
+
+def setup_mlflow(mlruns_dir: Path = MLRUNS_DIR, experiment: str = EXPERIMENT_NAME) -> None:
+    """Point MLflow at the tracking store (tracking + model registry) and select the experiment."""
+    mlflow.set_tracking_uri(tracking_uri(mlruns_dir))
     mlflow.set_experiment(experiment)
 
 
@@ -60,6 +68,36 @@ def dataset_version_tags(feature_store_path: Path, df: pd.DataFrame) -> dict[str
         "data.date_max": str(dates.max().date()),
         "git.commit": git_commit(),
     }
+
+
+def load_registered_model(alias: str = "champion") -> tuple[Any, dict[str, str]]:
+    """Load a registered model version by alias as its native object (predict_proba available).
+
+    Returns (model, info) where info has name, version, alias, model_type and run_id.
+    """
+    from mlflow.tracking import MlflowClient
+
+    mlflow.set_tracking_uri(tracking_uri())
+    client = MlflowClient()
+    mv = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, alias)
+    model_type = (mv.tags or {}).get("model_type", "CatBoost")
+    uri = f"models:/{REGISTERED_MODEL_NAME}@{alias}"
+    if model_type == "LightGBM":
+        from mlflow import lightgbm as mlflow_lightgbm
+
+        model = mlflow_lightgbm.load_model(uri)
+    else:
+        from mlflow import catboost as mlflow_catboost
+
+        model = mlflow_catboost.load_model(uri)
+    info = {
+        "name": REGISTERED_MODEL_NAME,
+        "version": str(mv.version),
+        "alias": alias,
+        "model_type": model_type,
+        "run_id": mv.run_id or "",
+    }
+    return model, info
 
 
 def log_dataset(df: pd.DataFrame, feature_store_path: Path, context: str = "training") -> None:

@@ -110,7 +110,7 @@
         "f1_up": 0.30022075055187636
       },
       "model_path": "models\\lightgbm_model.pkl",
-      "mlflow_run_id": "396285fb01ae4fcfa12ea9146d220a2d"
+      "mlflow_run_id": "c0c5672eef7f4d4f84450b65c5656b8d"
     },
     "CatBoost": {
       "folds": {
@@ -191,13 +191,13 @@
         "f1_up": 0.31682090364725096
       },
       "model_path": "models\\catboost_model.pkl",
-      "mlflow_run_id": "38bda63e75ee42abb025f34bc0f9e2d6"
+      "mlflow_run_id": "58be60d543b040259edd258a9ddb21f0"
     }
   },
   "best_model": "CatBoost",
   "registered_model": {
     "name": "psx-sentient-direction",
-    "version": "3",
-    "alias": "champion"
+    "version": "6",
+    "alias": "candidate"
   }
 }

@@ -93,28 +93,53 @@ Class balance: DOWN 23.4%, NEUTRAL 53.4%, UP 23.2%.
 
 ---
 
-## Later phases (Deliverable 2, in progress)
+## Deliverable 2 — End-to-End Production & Monitoring System
 
-- `src/nlp/` — news scraping (Business Recorder, Google News, PSX notices), entity mapping to the 30 stocks,
-  CPU FinBERT sentiment with 3-day EWMA.
-- `src/fusion/late_fusion.py` — conflict-veto / blended-conviction rules on top of model probabilities.
-  **Caveat:** the Test_2026 ablation in `models/ablation_metrics.json` uses *simulated* sentiment (template
-  headlines assigned from price patterns), because no historical news archive exists for 2017–2026. It is not
-  evidence that news improves predictions; real news is collected going forward.
-- `src/data/live_updater.py`, `src/api/` — FastAPI service and Streamlit dashboard. The current
-  `models/latest_signals.json` is a demo snapshot (hand-picked dates, sample off-market data), to be replaced
-  by a daily data collector.
-
-### Run tests
-
-```bash
-pytest -v
+```
+psxdata API + Yahoo/FRED ──► fetch_new_batch (Jul–Nov 2026, DVC data v2) ──► same cleaning + features
+                                                                                   │
+   ┌──────────────── docker compose on AWS EC2 ───────────────────────────────────┼──────────────┐
+   │  FastAPI :8000  ◄── champion from MLflow registry (:5000, artifacts in S3)    │              │
+   │   /predict  probabilities · confidence · SHAP · news-sentiment veto           ▼              │
+   │   /metrics ──► Prometheus :9090 ──► Grafana :3000 (latency, errors, drift, alerts)            │
+   │  Streamlit :8501 (signals, predict & explain, monitoring)                                     │
+   │  trainer job: replay traffic → PSI/KS drift → Optuna challenger → compare → promote/rollback  │
+   └──────────────────────── container logs ──► CloudWatch Logs ─────────────────────────────────┘
+GitHub Actions: unit tests → DVC pull + validation + retrain → evaluation gate (Test_2026) → deploy to EC2
 ```
 
-### Serve locally
+| Requirement | Implementation |
+| :--- | :--- |
+| Serving API + UI | `src/api/main.py` (FastAPI), `src/api/app.py` (Streamlit); live inputs = stock/date or an editable 27-feature vector |
+| Explanations | Per-prediction SHAP (native CatBoost/LightGBM), class probabilities and confidence |
+| Late fusion (proposal) | `src/models/stacking.py` meta-learner over LightGBM + CatBoost probabilities; conflict-veto gate on live FinBERT/entered sentiment |
+| Eval-gated CI/CD | `.github/workflows/ci-cd.yml` + `src/monitoring/gate.py`: blocks deploy if Test_2026 metrics fall below `models/production_benchmark.json` |
+| Live observability | Prometheus metrics (latency, error rate, prediction mix, confidence, PSI per feature), Grafana dashboard + alert rules (`monitoring/`), CloudWatch logs |
+| Drift detection | `src/monitoring/drift.py`: PSI + KS per feature and predicted-class PSI, on the new batch or on served inputs |
+| Closed-loop retraining | `src/monitoring/loop.py` / `retrain.py`: drift → Optuna-tuned challenger → champion vs challenger on an unseen window → promote, `previous_champion` kept for `--rollback` |
+| Deployment | `Dockerfile`, `docker-compose.yml`, `docker-compose.aws.yml`, `deploy/AWS_DEPLOY.md` |
+
+### Results on the new batch (Jul–Nov 2026)
+
+- **Drift:** 10 of 20 market features drifted (volatility: ATR, Bollinger width, 20-day vol; Brent and USD/PKR returns) → retraining triggered.
+- **Retraining:** on Oct 1 – Nov 24 2026 (unseen by both), champion (trained to 2025) Macro F1 **0.381** / active precision 24.2%
+  vs Optuna-tuned challenger (trained to Sep 2026) **0.397** / 25.8% → challenger promoted.
+- **Stacking meta-learner:** Test_2026 Macro F1 0.402 / active precision 29.2% vs CatBoost 0.397 / 28.5% (leave-one-year-out
+  validation 0.378 vs CatBoost 0.387 — a small, not yet conclusive gain).
+
+### Honest limitations
+
+- **News sentiment and the veto run live only.** No 2017–2026 news archive exists, so their effect on accuracy cannot be
+  measured yet; the old 69.77% "fusion" figure in `models/ablation_metrics.json` came from simulated sentiment and is not a result.
+- Dividend days are detected heuristically, not from real dividend history.
+- Off-market (NDM) and futures data are not model inputs (no training history).
+
+### Run locally
 
 ```bash
-pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
-uvicorn src.api.main:app --port 8000          # http://localhost:8000/docs
-streamlit run src/api/app.py --server.port 8501
+pip install -r requirements.txt                      # + requirements-nlp.txt for FinBERT
+pytest -q
+uvicorn src.api.main:app --port 8000                 # http://localhost:8000/docs
+API_URL=http://localhost:8000 streamlit run src/api/app.py
+python -m src.monitoring.loop --skip-fetch           # drift -> retrain -> promote
 ```

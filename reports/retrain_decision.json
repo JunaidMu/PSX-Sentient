@@ -1,0 +1,50 @@
+{
+  "trigger": "drift",
+  "decision": "promoted",
+  "champion_before": "3",
+  "challenger_version": "4",
+  "champion_after": "4",
+  "compare_window": [
+    "2026-10-01",
+    "2026-11-25"
+  ],
+  "compare_rows": 1161,
+  "challenger_train_end": "2026-09-23",
+  "optuna_best_params": {
+    "depth": 6,
+    "learning_rate": 0.026450634586450826,
+    "l2_leaf_reg": 1.4321698289111515
+  },
+  "champion_metrics": {
+    "macro_f1": 0.3813931368449848,
+    "active_signal_precision": 0.24242424242424243,
+    "active_macro_precision": 0.24543501611170784,
+    "active_signal_rate": 0.5968992248062015,
+    "precision_down": 0.22556390977443608,
+    "recall_down": 0.37815126050420167,
+    "f1_down": 0.282574568288854,
+    "precision_neutral": 0.7008547008547008,
+    "recall_neutral": 0.4924924924924925,
+    "f1_neutral": 0.5784832451499118,
+    "precision_up": 0.2653061224489796,
+    "recall_up": 0.3035019455252918,
+    "f1_up": 0.2831215970961887
+  },
+  "challenger_metrics": {
+    "macro_f1": 0.3967131908812869,
+    "active_signal_precision": 0.2582972582972583,
+    "active_macro_precision": 0.2591188712993765,
+    "active_signal_rate": 0.5968992248062015,
+    "precision_down": 0.2452316076294278,
+    "recall_down": 0.37815126050420167,
+    "f1_down": 0.2975206611570248,
+    "precision_neutral": 0.7115384615384616,
+    "recall_neutral": 0.5,
+    "f1_neutral": 0.5873015873015873,
+    "precision_up": 0.27300613496932513,
+    "recall_up": 0.3463035019455253,
+    "f1_up": 0.3053173241852487
+  },
+  "rule": "promote if challenger macro_f1 >= champion + 0.0 and active precision drop <= 0.02",
+  "mlflow_run_id": "c38b22504ac44aa580604082ad8d205f"
+}
