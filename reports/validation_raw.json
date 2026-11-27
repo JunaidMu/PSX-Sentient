@@ -1,6 +1,6 @@
 {
   "stage": "raw",
-  "source": "psx_historical_data\\stocks_with_macro.csv",
+  "source": "psx_historical_data/stocks_with_macro.csv",
   "passed": true,
   "checks_total": 18,
   "checks_failed": 0,

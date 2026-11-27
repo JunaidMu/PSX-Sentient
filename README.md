@@ -122,10 +122,9 @@ GitHub Actions: unit tests → DVC pull + validation + retrain → evaluation ga
 ### Results on the new batch (Jul–Nov 2026)
 
 - **Drift:** 10 of 20 market features drifted (volatility: ATR, Bollinger width, 20-day vol; Brent and USD/PKR returns) → retraining triggered.
-- **Retraining:** on Oct 1 – Nov 24 2026 (unseen by both), champion (trained to 2025) Macro F1 **0.381** / active precision 24.2%
-  vs Optuna-tuned challenger (trained to Sep 2026) **0.397** / 25.8% → challenger promoted.
-- **Stacking meta-learner:** Test_2026 Macro F1 0.402 / active precision 29.2% vs CatBoost 0.397 / 28.5% (leave-one-year-out
-  validation 0.378 vs CatBoost 0.387 — a small, not yet conclusive gain).
+- **Retraining:** on 2026-10-01 – 2026-11-24 (unseen by both), champion (trained to 2025) Macro F1 **0.377** / active precision 24.3%
+  vs Optuna-tuned challenger (trained to 2026-09-23) **0.393** / 25.9% → challenger promoted, API hot-reloaded; `--rollback` restores the previous champion.
+- **Stacking meta-learner:** Test_2026 Macro F1 0.397 / active precision 28.7% vs CatBoost 0.397 / 28.5% (leave-one-year-out validation 0.381 vs CatBoost 0.387) — no meaningful gain yet, so the single CatBoost champion is served.
 
 ### Honest limitations
 

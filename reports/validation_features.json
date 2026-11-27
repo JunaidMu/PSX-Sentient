@@ -1,6 +1,6 @@
 {
   "stage": "features",
-  "source": "psx_historical_data\\feature_store.parquet",
+  "source": "psx_historical_data/feature_store.parquet",
   "passed": true,
   "checks_total": 9,
   "checks_failed": 0,
