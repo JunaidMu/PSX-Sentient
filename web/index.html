@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PSX Sentient — Pre-market intelligence for the Pakistan Stock Exchange</title>
+  <meta name="description" content="Next-day signals, explanations, news sentiment and off-market activity for 30 KSE-100 stocks.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%234338ca'/><text x='16' y='22' font-family='Arial' font-weight='800' font-size='15' fill='white' text-anchor='middle'>PS</text></svg>">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#/"><span class="brand-mark">PS</span>PSX Sentient</a>
+      <nav class="nav">
+        <a href="#/" data-route="home">Brief</a>
+        <a href="#/monitoring" data-route="monitoring">Monitoring</a>
+        <a href="#/about" data-route="about">How it works</a>
+      </nav>
+      <div class="topbar-right">
+        <span class="pill hide-sm" id="model-pill"><span class="dot"></span>Connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <main id="app" class="page"></main>
+
+  <footer class="footer">
+    PSX Sentient is an MLOps research project. Signals are model outputs for education and analysis — not investment
+    advice. Data: PSX Data Portal, psxdata, Yahoo Finance, FRED, Business Recorder, Google News.
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -77,6 +77,8 @@ jobs:
           script: |
             set -e
             cd ~/PSX-Sentient
+            # Containers run as root, so files they wrote (reports, data, mlflow) are root-owned: reclaim them
+            sudo chown -R "$(id -u):$(id -g)" .
             # The server regenerates reports (drift, retraining, pre-market) and dvc.lock while running;
             # keep its live reports, take everything else from the pushed commit.
             rm -rf /tmp/psx_reports && cp -r reports /tmp/psx_reports

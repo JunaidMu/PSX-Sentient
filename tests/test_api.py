@@ -101,3 +101,11 @@ def test_off_market_whale_block_detector() -> None:
     assert bull["is_whale_block"] is True and bull["W_ndm"] > 0.2
     small = compute_whale_block_metric(ndm_volume=20_000, ndm_deal_rate=105.0, ready_close=100.0, vol_sma_20=1_000_000)
     assert small["is_whale_block"] is False and small["W_ndm"] == 0.0
+
+
+def test_history_and_performance_endpoints(client) -> None:
+    h = client.get("/history/OGDC?days=10").json()
+    assert h["symbol"] == "OGDC" and len(h["dates"]) == len(h["close"]) == 10
+    assert client.get("/history/ENGRO").status_code == 404
+    perf = client.get("/performance").json()
+    assert set(perf) == {"models", "baselines", "stacking", "benchmark"}

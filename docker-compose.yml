@@ -5,7 +5,7 @@
 #   docker compose up -d                                      # api, dashboard, mlflow, prometheus, grafana
 #   docker compose run --rm trainer python -m src.monitoring.loop --skip-fetch   # drift -> retrain loop
 #
-# Ports: 8000 API (/docs, /metrics) · 8501 dashboard · 5000 MLflow · 9090 Prometheus · 3000 Grafana
+# Ports: 80 web app · 8000 API (/docs, /metrics) · 8501 Streamlit dashboard (backup) · 5000 MLflow · 9090 Prometheus · 3000 Grafana
 # The repo directory is mounted at /app so data, models and reports are shared by every service.
 # On AWS add the CloudWatch logging override:  docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d
 
@@ -68,6 +68,17 @@ services:
       - "8501:8501"
     depends_on:
       - api
+
+  web:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${WEB_PORT:-80}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
 
   trainer:
     <<: *app

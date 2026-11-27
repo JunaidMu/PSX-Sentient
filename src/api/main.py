@@ -257,3 +257,50 @@ def drift_check(last_n: int = 3000) -> dict[str, Any]:
     report = run_drift_check(served, model=CHAMPION.model)
     _publish_drift(report)
     return {k: v for k, v in report.items() if k != "features"}
+
+
+@app.get("/history/{symbol}")
+def price_history(symbol: str, days: int = 260) -> dict[str, Any]:
+    """Daily closing prices and volume for the stock page chart (most recent `days` sessions)."""
+    sym = symbol.strip().upper()
+    sub = FEATURES.df[FEATURES.df["symbol"] == sym].tail(max(5, min(days, 2600)))
+    if sub.empty:
+        raise HTTPException(404, f"Unknown symbol {sym}")
+    return {"symbol": sym, "dates": sub["date"].dt.strftime("%Y-%m-%d").tolist(),
+            "close": [round(float(x), 2) for x in sub["close"]],
+            "volume": [int(x) for x in sub["volume"]] if "volume" in sub else []}
+
+
+@app.get("/model/versions")
+def model_versions() -> dict[str, Any]:
+    """Model registry history: every version with its aliases (champion, challenger, ...) and tags."""
+    try:
+        import mlflow
+        from mlflow.tracking import MlflowClient
+
+        from src.models.tracking import REGISTERED_MODEL_NAME, tracking_uri
+
+        mlflow.set_tracking_uri(tracking_uri())
+        client = MlflowClient()
+        aliases: dict[str, list[str]] = {}
+        for alias, ver in (client.get_registered_model(REGISTERED_MODEL_NAME).aliases or {}).items():
+            aliases.setdefault(str(ver), []).append(alias)
+        versions = [
+            {"version": int(v.version), "created_ms": int(v.creation_timestamp or 0), "run_id": v.run_id,
+             "aliases": sorted(aliases.get(str(v.version), [])), "tags": dict(v.tags or {})}
+            for v in client.search_model_versions(f"name='{REGISTERED_MODEL_NAME}'")
+        ]
+        return {"name": REGISTERED_MODEL_NAME, "versions": sorted(versions, key=lambda v: -v["version"])}
+    except Exception as exc:
+        return {"name": None, "versions": [], "error": str(exc)[:200]}
+
+
+@app.get("/performance")
+def performance() -> dict[str, Any]:
+    """Offline evaluation results: baselines, primary models, stacking meta-learner, CI benchmark."""
+    out: dict[str, Any] = {}
+    for key, path in {"models": "models/model_comparison_metrics.json", "baselines": "models/baseline_metrics.json",
+                      "stacking": "models/stacking_metrics.json", "benchmark": "models/production_benchmark.json"}.items():
+        p = Path(path)
+        out[key] = json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    return out
