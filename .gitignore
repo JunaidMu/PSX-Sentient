@@ -36,3 +36,8 @@ mlflow_server/
 reports/drift_report.html
 .env
 Submission/
+# Pre-market raw files and news archive are DVC-tracked (dvc add in scripts/premarket.sh)
+/psx_historical_data/daily
+/psx_historical_data/news
+reports/premarket_latest.json
+/Daily Downloads PSX Website/

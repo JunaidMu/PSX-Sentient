@@ -173,7 +173,7 @@ def scrape_psx_notices(
 def fetch_all_psx_news(
     timeout: float = 10.0,
     max_items_per_source: int = 25,
-    allow_fallback: bool = True,
+    allow_fallback: bool = False,
     session: Any | None = None,
 ) -> pd.DataFrame:
     """Scrape Business Recorder RSS, Google News PSX RSS, and PSX Notices, then map & deduplicate.

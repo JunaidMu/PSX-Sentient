@@ -59,7 +59,15 @@ docker compose run --rm trainer python -m src.monitoring.retrain --rollback     
 curl -X POST localhost:8000/model/reload
 ```
 
-## 6. CI/CD secrets (GitHub → Settings → Secrets and variables → Actions)
+## 6. Daily pre-market job (09:00 PKT = 04:00 UTC, Monday–Friday)
+`crontab -e` on the instance and add:
+```
+0 4 * * 1-5 cd ~/PSX-Sentient && docker compose run --rm trainer sh scripts/premarket.sh >> logs/premarket.log 2>&1
+```
+It fetches the latest prices/macro, the five PSX daily files and overnight news, scores news with FinBERT,
+writes the pre-market snapshot the API and dashboard use, versions the raw files with DVC and runs the drift loop.
+
+## 7. CI/CD secrets (GitHub → Settings → Secrets and variables → Actions)
 `DAGSHUB_USER`, `DAGSHUB_TOKEN` (pipeline + gate), `EC2_HOST` (public IP), `EC2_USER` (`ubuntu`),
 `EC2_SSH_KEY` (contents of the `.pem`). Pushes to `main` deploy only after tests, validation and the gate pass.
 

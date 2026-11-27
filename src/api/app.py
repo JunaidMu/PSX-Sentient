@@ -72,13 +72,25 @@ tab_sig, tab_pred, tab_mon, tab_perf = st.tabs(["Latest signals", "Predict & exp
 with tab_sig:
     data = api_get("/signals/latest")
     st.subheader(f"Signals for the next session after {data['date']}")
+    pm = data.get("premarket")
+    if pm:
+        ok = sum(v == "ok" for v in pm["sources"].values())
+        st.info(f"Pre-market brief for {pm['trading_day']} (collected {pm['generated_at_pkt']} PKT): "
+                f"{ok}/{len(pm['sources'])} PSX files · {pm['news']} · {pm['counts']['stocks_with_news']} stocks with fresh news · "
+                f"{pm['counts']['whale_blocks']} off-market whale blocks · {pm['counts']['announcements']} announcements")
     rows = [{
         "Symbol": s["symbol"], "Close": s["close"],
         "P(DOWN)": s["probabilities"]["DOWN"], "P(NEUTRAL)": s["probabilities"]["NEUTRAL"], "P(UP)": s["probabilities"]["UP"],
-        "Model call": BADGE[s["model_signal"]], "Confidence": s["confidence"], "Final signal": BADGE[s["final_signal"]],
+        "Model call": BADGE[s["model_signal"]], "Confidence": s["confidence"],
+        "News S_t": s.get("sentiment_S_t"), "Whale W_ndm": s.get("whale_score"),
+        "Futures OI % float": s.get("futures_oi_pct_free_float"),
+        "Final signal": BADGE[s["final_signal"]] + (" (veto)" if s["veto_triggered"] else ""),
         "Top driver": s["explanation"]["top_features"][0]["feature"],
+        "Latest headline": (s.get("latest_headline") or {}).get("title", ""),
     } for s in data["signals"]]
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    st.caption("News S_t, whale and futures columns come from the 09:00 PKT pre-market job. They are context and "
+               "feed the veto/blending rule, but are not model inputs (no training history yet).")
     st.caption("Model call = most likely class. Final signal = late-fusion rule: an UP/DOWN call needs net edge "
                "|0.75·(P_up−P_down) + 0.25·S_t| > 0.20 and P(NEUTRAL) < 0.50, and is vetoed to NEUTRAL when "
                "news sentiment strongly contradicts it.")
@@ -127,6 +139,21 @@ with tab_pred:
                 shap_df = pd.DataFrame(res["explanation"]["top_features"]).set_index("feature")
                 st.bar_chart(shap_df["shap"], horizontal=True)
                 st.dataframe(shap_df, width="stretch")
+                st.caption(f"Sentiment used for the veto: {res.get('sentiment_S_t')} (source: {res.get('sentiment_source')})")
+                ctx = res.get("premarket_context")
+                if ctx:
+                    st.markdown(f"**Pre-market context ({ctx['trading_day']})**")
+                    for h in ctx["sentiment"].get("latest_headlines", []):
+                        st.write(f"📰 {h['title']}  _(FinBERT {h['score']:+.2f})_")
+                    if ctx.get("whale"):
+                        w = ctx["whale"]
+                        st.write(f"🐋 Off-market: {w['ndm_volume']:,} shares at {w['ndm_deal_rate']} "
+                                 f"({w['ndm_spread_pct']:+.2f}% vs close, {w['ndm_vol_pct_of_sma20']:.1f}% of 20-day volume) "
+                                 f"→ W_ndm {w['W_ndm']:+.2f}")
+                    if ctx.get("futures_open_interest"):
+                        st.write(f"📈 Futures open interest: {ctx['futures_open_interest']['pct_free_float']}% of free float")
+                    for a in ctx.get("announcements", []):
+                        st.write(f"📢 {a}")
             except Exception as exc:
                 st.error(str(exc))
 

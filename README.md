@@ -126,12 +126,28 @@ GitHub Actions: unit tests → DVC pull + validation + retrain → evaluation ga
   vs Optuna-tuned challenger (trained to 2026-09-23) **0.393** / 25.9% → challenger promoted, API hot-reloaded; `--rollback` restores the previous champion.
 - **Stacking meta-learner:** Test_2026 Macro F1 0.397 / active precision 28.7% vs CatBoost 0.397 / 28.5% (leave-one-year-out validation 0.381 vs CatBoost 0.387) — no meaningful gain yet, so the single CatBoost champion is served.
 
+### Pre-market job (09:00 PKT, 30 minutes before the open) — `scripts/premarket.sh`
+
+1. Latest prices + macro → features (`src/data/fetch_new_batch.py`, `src/monitoring/batch.py`)
+2. PSX Data Portal daily files (`src/data/psx_files.py`): Market Summary (closing prices), Off-Market Transaction
+   Summary (block deals → whale score W_ndm), futures open interest (DFC), corporate announcements (results,
+   dividends, book closures → factual headlines) and short-sell volume
+3. Overnight news (Business Recorder, Google News, PSX notices) + announcements → CPU FinBERT + PSX shock
+   keywords → news archive → per-stock 3-day EWMA sentiment S_t (`src/data/premarket.py`)
+4. Snapshot used by the API: S_t feeds the conflict veto automatically; whales, futures OI, headlines and
+   announcements are shown next to each prediction. Raw files and the news archive are versioned with DVC.
+5. Drift check → retraining loop if the drift rule fires.
+
+These sources are **context, not model inputs** — there is no history to train on yet; the daily archive builds it.
+
 ### Honest limitations
 
 - **News sentiment and the veto run live only.** No 2017–2026 news archive exists, so their effect on accuracy cannot be
   measured yet; the old 69.77% "fusion" figure in `models/ablation_metrics.json` came from simulated sentiment and is not a result.
 - Dividend days are detected heuristically, not from real dividend history.
-- Off-market (NDM) and futures data are not model inputs (no training history).
+- Off-market (NDM), futures, short-sell and news data are not model inputs (no training history yet).
+- The target is close-to-close, but a 09:00 PKT signal can only be acted on at the 09:30 open, so part of the
+  predicted move (the overnight gap) is not capturable; an open-to-close target is future work.
 
 ### Run locally
 

@@ -243,7 +243,7 @@ def run_live_nlp_pipeline(
     news_df = fetch_all_psx_news(
         timeout=timeout,
         max_items_per_source=max_items_per_source,
-        allow_fallback=True,
+        allow_fallback=False,
     )
     engine = FinBERTSentimentEngine(device="cpu")
     scored_df = engine.score_headlines_df(news_df)

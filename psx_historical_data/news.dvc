@@ -1,0 +1,6 @@
+outs:
+- md5: 14fec91deb7c1abfd6277bb0dc0eccda.dir
+  size: 21263
+  nfiles: 1
+  hash: md5
+  path: news

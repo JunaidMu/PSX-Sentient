@@ -30,7 +30,15 @@ from prometheus_client import Counter, Gauge, Histogram
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
 
-from src.api.serving import CHAMPION, FEATURES, log_prediction, predict_features, read_prediction_log
+from src.api.serving import (
+    CHAMPION,
+    FEATURES,
+    log_prediction,
+    predict_features,
+    premarket_context,
+    premarket_snapshot,
+    read_prediction_log,
+)
 from src.features.build_features import FEATURE_COLUMNS
 from src.nlp.entity_mapper import KSE30_SYMBOLS
 
@@ -97,7 +105,8 @@ def root() -> dict[str, Any]:
         "version": app.version,
         "status": "ok",
         "endpoints": {"docs": "/docs", "health": "/health", "model": "/model", "predict": "/predict",
-                      "latest_signals": "/signals/latest", "drift": "/drift", "metrics": "/metrics"},
+                      "latest_signals": "/signals/latest", "premarket": "/premarket",
+                      "drift": "/drift", "metrics": "/metrics"},
     }
 
 
@@ -130,16 +139,23 @@ def reload_model() -> dict[str, Any]:
     return {"reloaded": True, "served": info}
 
 
-def _sentiment_for(req: PredictRequest) -> float | None:
+def _sentiment_for(req: PredictRequest, symbol: str | None, is_latest: bool) -> tuple[float | None, str]:
+    """Sentiment for the veto: explicit value > scored headline > today's pre-market news snapshot."""
     if req.sentiment is not None:
-        return req.sentiment
+        return req.sentiment, "request"
     if req.headline:
         if not ENABLE_NLP:
             raise HTTPException(400, "Headline scoring needs ENABLE_NLP=1; pass `sentiment` instead.")
         from src.nlp.finbert_engine import FinBERTSentimentEngine
 
-        return float(FinBERTSentimentEngine(device="cpu").score_texts([req.headline])["sentiment_score"].iloc[0])
-    return None
+        score = FinBERTSentimentEngine(device="cpu").score_texts([req.headline])["sentiment_score"].iloc[0]
+        return float(score), "headline (FinBERT)"
+    if symbol and is_latest:
+        ctx = premarket_context(symbol)
+        s_t = (ctx or {}).get("sentiment", {}).get("S_t")
+        if s_t is not None:
+            return float(s_t), f"pre-market news ({ctx['trading_day']})"
+    return None, "none"
 
 
 @app.post("/predict")
@@ -163,7 +179,12 @@ def predict(req: PredictRequest) -> dict[str, Any]:
     else:
         raise HTTPException(422, "Provide either `symbol` (+ optional `date`) or `features`.")
 
-    result = {**meta, **predict_features(features, sentiment=_sentiment_for(req))}
+    sym = meta.get("symbol")
+    is_latest = req.features is None and req.date is None
+    sentiment, source = _sentiment_for(req, sym, is_latest)
+    result = {**meta, **predict_features(features, sentiment=sentiment), "sentiment_source": source}
+    if sym and is_latest:
+        result["premarket_context"] = premarket_context(sym)
     PREDICTIONS.labels(model_signal=result["model_signal"], final_signal=result["final_signal"]).inc()
     CONFIDENCE.observe(result["confidence"])
     if result["veto_triggered"]:
@@ -192,10 +213,28 @@ def latest_signals() -> dict[str, Any]:
             row = FEATURES.row(sym, str(date.date()))
         except KeyError:
             continue
-        res = predict_features({c: float(row[c]) for c in FEATURE_COLUMNS}, top_k=3)
-        rows.append({"symbol": sym, "close": float(row["close"]), **res})
+        ctx = premarket_context(sym) or {}
+        s_t = (ctx.get("sentiment") or {}).get("S_t")
+        res = predict_features({c: float(row[c]) for c in FEATURE_COLUMNS}, sentiment=s_t, top_k=3)
+        rows.append({"symbol": sym, "close": float(row["close"]), **res,
+                     "whale_score": (ctx.get("whale") or {}).get("W_ndm"),
+                     "futures_oi_pct_free_float": (ctx.get("futures_open_interest") or {}).get("pct_free_float"),
+                     "latest_headline": next(iter((ctx.get("sentiment") or {}).get("latest_headlines", [])), None),
+                     "announcements": ctx.get("announcements", [])})
     counts = {s: sum(r["final_signal"] == s for r in rows) for s in ("UP", "NEUTRAL", "DOWN")}
-    return {"date": str(date.date()), "model": CHAMPION.info, "summary": counts, "signals": rows}
+    snap = premarket_snapshot()
+    return {"date": str(date.date()), "model": CHAMPION.info, "summary": counts,
+            "premarket": {k: snap[k] for k in ("trading_day", "generated_at_pkt", "sources", "news", "counts")} if snap else None,
+            "signals": rows}
+
+
+@app.get("/premarket")
+def premarket() -> dict[str, Any]:
+    """Latest pre-market snapshot: news sentiment, off-market whales, futures OI, announcements."""
+    snap = premarket_snapshot()
+    if not snap:
+        raise HTTPException(404, "No pre-market snapshot yet; run python -m src.data.premarket")
+    return snap
 
 
 @app.get("/drift")

@@ -56,10 +56,19 @@ class FeatureStore:
 
     def __init__(self) -> None:
         self._df: pd.DataFrame | None = None
+        self._stamp: tuple | None = None
+
+    def _files_stamp(self) -> tuple:
+        return tuple(Path(p).stat().st_mtime if Path(p).exists() else 0
+                     for p in (COMBINED_FEATURES_PATH, NEW_FEATURES_PATH, OUTPUT_PARQUET_PATH))
 
     @property
     def df(self) -> pd.DataFrame:
+        stamp = self._files_stamp()
+        if self._df is not None and self._stamp is not None and stamp != self._stamp and any(stamp):
+            self._df = None  # the daily job wrote new feature files: reload them
         if self._df is None:
+            self._stamp = stamp
             frames = []
             for path in (COMBINED_FEATURES_PATH, NEW_FEATURES_PATH, OUTPUT_PARQUET_PATH):
                 if Path(path).exists():
@@ -130,6 +139,23 @@ def predict_features(features: dict[str, float], sentiment: float | None = None,
         },
         "model": {k: CHAMPION.info.get(k) for k in ("name", "version", "alias", "model_type")},
     }
+
+
+PREMARKET_SNAPSHOT = Path("reports/premarket_latest.json")
+
+
+def premarket_snapshot() -> dict[str, Any] | None:
+    """Latest pre-market snapshot (news sentiment, whales, futures OI, announcements) if collected."""
+    if not PREMARKET_SNAPSHOT.exists():
+        return None
+    return json.loads(PREMARKET_SNAPSHOT.read_text(encoding="utf-8"))
+
+
+def premarket_context(symbol: str) -> dict[str, Any] | None:
+    snap = premarket_snapshot()
+    if not snap or symbol not in snap.get("stocks", {}):
+        return None
+    return {"trading_day": snap["trading_day"], **snap["stocks"][symbol]}
 
 
 def log_prediction(record: dict[str, Any], features: dict[str, float]) -> None:
