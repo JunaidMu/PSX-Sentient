@@ -78,3 +78,13 @@ stages:
     metrics:
       - models/stacking_metrics.json:
           cache: false
+
+  signal_policy:
+    cmd: python -m src.models.signal_policy
+    deps:
+      - models/val_oof_predictions.parquet
+      - models/test_2026_predictions.parquet
+      - src/models/signal_policy.py
+    metrics:
+      - models/signal_policy.json:
+          cache: false

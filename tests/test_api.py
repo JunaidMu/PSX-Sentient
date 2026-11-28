@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 
 from src.api import serving
-from src.data.live_updater import compute_whale_block_metric
+from src.data.whale import compute_whale_block_metric
 from src.features.build_features import FEATURE_COLUMNS
 from src.nlp.entity_mapper import KSE30_SYMBOLS
 
@@ -109,3 +109,23 @@ def test_history_and_performance_endpoints(client) -> None:
     assert client.get("/history/ENGRO").status_code == 404
     perf = client.get("/performance").json()
     assert set(perf) == {"models", "baselines", "stacking", "benchmark"}
+
+
+def test_invalid_date_is_a_client_error_not_a_crash(client) -> None:
+    assert client.post("/predict", json={"symbol": "OGDC", "date": "not-a-date"}).status_code == 422
+    assert client.get("/features/OGDC?date=garbage").status_code == 422
+    assert client.post("/predict", json={"symbol": "OGDC", "date": "2099-01-01"}).status_code == 404
+
+
+def test_admin_endpoints_require_key(client, monkeypatch) -> None:
+    import src.api.main as main
+
+    monkeypatch.setattr(main, "ADMIN_API_KEY", "s3cret")
+    assert client.post("/model/reload").status_code == 401
+    assert client.post("/model/reload", headers={"X-Admin-Key": "wrong"}).status_code == 401
+    assert client.post("/model/reload", headers={"X-Admin-Key": "s3cret"}).status_code == 200
+
+
+def test_prediction_reports_the_signal_policy(client) -> None:
+    res = client.post("/predict", json={"symbol": "OGDC"}).json()
+    assert 0 < res["policy"]["conviction_threshold"] <= 0.25 and res["policy"]["neutral_cap"] == 0.5

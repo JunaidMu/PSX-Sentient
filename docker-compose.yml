@@ -5,7 +5,9 @@
 #   docker compose up -d                                      # api, dashboard, mlflow, prometheus, grafana
 #   docker compose run --rm trainer python -m src.monitoring.loop --skip-fetch   # drift -> retrain loop
 #
-# Ports: 80 web app · 8000 API (/docs, /metrics) · 8501 Streamlit dashboard (backup) · 5000 MLflow · 9090 Prometheus · 3000 Grafana
+# Ports: 80 web app · 8000 API (/docs, /metrics) · 8501 Streamlit dashboard (backup) · 3000 Grafana (login)
+#        5000 MLflow and 9090 Prometheus via nginx with a password (deploy/htpasswd from scripts/make_htpasswd.sh)
+# Required in .env: GRAFANA_ADMIN_PASSWORD, ADMIN_PASSWORD (nginx login), ADMIN_API_KEY (API admin endpoints)
 # The repo directory is mounted at /app so data, models and reports are shared by every service.
 # On AWS add the CloudWatch logging override:  docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d
 
@@ -34,10 +36,10 @@ services:
       --artifacts-destination ${MLFLOW_ARTIFACTS_DESTINATION:-/app/mlflow_server/artifacts}
       --serve-artifacts
       --allowed-hosts "*"
+      --workers 2
     environment:
       MLFLOW_TRACKING_URI: ""
-    ports:
-      - "5000:5000"
+    # not published: reachable from outside only through nginx (port 5000, password-protected)
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://localhost:5000/health"]
       interval: 15s
@@ -74,10 +76,15 @@ services:
     volumes:
       - ./web:/usr/share/nginx/html:ro
       - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/htpasswd:/etc/nginx/htpasswd:ro
     ports:
       - "${WEB_PORT:-80}:80"
+      - "5000:5000"
+      - "9090:9090"
     depends_on:
       - api
+      - mlflow
+      - prometheus
     restart: unless-stopped
 
   trainer:
@@ -98,14 +105,13 @@ services:
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
-    ports:
-      - "9090:9090"
+    # not published: reachable from outside only through nginx (port 9090, password-protected)
     restart: unless-stopped
 
   grafana:
     image: grafana/grafana:11.2.0
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-psx-sentient}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
     volumes:

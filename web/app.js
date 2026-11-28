@@ -305,7 +305,7 @@ function drawPrediction(pred) {
       <div class="stat"><div class="l">Blended conviction</div><div class="v num">${signed(pred.C_t)}</div></div>
     </div>
     ${vetoNote}${newsNote}
-    <p class="faint" style="font-size:12.5px;margin:14px 0 0">An UP/DOWN call needs blended conviction beyond ±0.20 and a neutral probability under 50%. Otherwise the signal stays NEUTRAL.</p>`;
+    <p class="faint" style="font-size:12.5px;margin:14px 0 0">An UP/DOWN call needs blended conviction beyond ±${pred.policy ? pred.policy.conviction_threshold : 0.2} (threshold tuned on 2023–25 validation) and a neutral probability under 50%. Otherwise the signal stays NEUTRAL.</p>`;
 }
 
 function drawShap(pred) {

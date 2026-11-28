@@ -84,9 +84,12 @@ jobs:
             rm -rf /tmp/psx_reports && cp -r reports /tmp/psx_reports
             git fetch origin main && git reset --hard origin/main
             cp -r /tmp/psx_reports/. reports/
+            [ -f deploy/htpasswd ] || sh scripts/make_htpasswd.sh
             docker compose -f docker-compose.yml -f docker-compose.aws.yml up -d --build
-            sleep 20
-            curl -fs -X POST http://localhost:8000/model/reload
+            # wait for the API to come back (up to ~3 min), then make it re-read the registry champion
+            KEY="$(grep -E '^ADMIN_API_KEY=' .env | cut -d= -f2-)"
+            for i in $(seq 1 36); do curl -fs http://localhost:8000/health >/dev/null && break; sleep 5; done
+            curl -fs -X POST -H "X-Admin-Key: $KEY" http://localhost:8000/model/reload >/dev/null
       - name: Skip deploy (EC2 secrets not configured)
         if: env.EC2_HOST == ''
         run: echo "EC2_HOST secret not set - deployment skipped."

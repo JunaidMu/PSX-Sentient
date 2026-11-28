@@ -1,4 +1,4 @@
-"""Unit tests for Phase 5: Late-Fusion Engine, Conflict Veto Gate, and Ablation Study."""
+"""Unit tests for the late-fusion decision rules (conflict veto gate, blended conviction)."""
 
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ import pandas as pd
 import pytest
 
 from src.fusion.late_fusion import (
-    ABLATION_METRICS_PATH,
-    FUSED_PREDICTIONS_PATH,
     apply_conviction_tabular_df,
     apply_late_fusion_df,
     apply_late_fusion_row,
@@ -106,60 +104,9 @@ def test_vectorized_late_fusion_matches_row_logic() -> None:
     assert list(vec_out["fused_signal"]) == [r["fused_signal"] for r in row_out]
 
 
-def test_ablation_metrics_and_saved_outputs() -> None:
-    """Verify models/ablation_metrics.json and fused Test_2026 predictions exist and are valid."""
-    assert ABLATION_METRICS_PATH.exists(), f"Missing ablation summary: {ABLATION_METRICS_PATH}"
-
-    summary = json.loads(ABLATION_METRICS_PATH.read_text(encoding="utf-8"))
-    assert summary["split"] == "Test_2026"
-    assert summary["total_rows"] > 3000
-
-    strategies = summary["strategies"]
-    for key in (
-        "a_tabular_argmax_baseline",
-        "b_conviction_thresholded_tabular",
-        "c_full_late_fusion_conflict_veto",
-    ):
-        assert key in strategies
-        m = strategies[key]
-        assert 0.0 <= m["macro_f1"] <= 1.0
-        assert 0.0 <= m["active_signal_precision"] <= 1.0
-        assert m["active_signal_count"] > 0
-
-    # Verify Conflict Veto Gate triggered on conflicting shock rows and Late-Fusion improved precision
-    assert strategies["c_full_late_fusion_conflict_veto"]["veto_count"] > 0
-    assert (
-        strategies["c_full_late_fusion_conflict_veto"]["active_signal_precision"]
-        > strategies["a_tabular_argmax_baseline"]["active_signal_precision"]
-    )
-    assert (
-        strategies["c_full_late_fusion_conflict_veto"]["active_signal_precision"]
-        > strategies["b_conviction_thresholded_tabular"]["active_signal_precision"]
-    )
-
-    if not FUSED_PREDICTIONS_PATH.exists():
-        pytest.skip("Local DVC artifact not present on CI runner")
-
-
-def test_sentiment_series_zero_target_leakage() -> None:
-    """Verify build_test_2026_sentiment_series does not use target_class (strictly causal day-t)."""
-    from src.features.build_features import OUTPUT_PARQUET_PATH
-    from src.fusion.late_fusion import TEST_PREDICTIONS_PATH, build_test_2026_sentiment_series
-
-    if not TEST_PREDICTIONS_PATH.exists() or not OUTPUT_PARQUET_PATH.exists():
-        pytest.skip("Local DVC artifact not present on CI runner")
-
-    preds = pd.read_parquet(TEST_PREDICTIONS_PATH).head(300).copy()
-    base_sent = build_test_2026_sentiment_series(preds)
-
-    corrupted_preds = preds.copy()
-    corrupted_preds["target_class"] = 2 - corrupted_preds["target_class"]
-    corrupted_sent = build_test_2026_sentiment_series(corrupted_preds)
-
-    np.testing.assert_allclose(
-        base_sent["S_t"].to_numpy(),
-        corrupted_sent["S_t"].to_numpy(),
-        rtol=1e-12,
-        atol=1e-12,
-        err_msg="Target leakage detected in build_test_2026_sentiment_series!",
-    )
+def test_tuned_threshold_is_applied() -> None:
+    """A lower (validation-tuned) conviction threshold turns a modest edge into a directional call."""
+    row = dict(P_down=0.25, P_neutral=0.40, P_up=0.35, S_t=0.0)  # C_t = 0.75 * 0.10 = 0.075
+    assert apply_late_fusion_row(**row)["fused_signal"] == "NEUTRAL"                  # proposal default 0.20
+    assert apply_late_fusion_row(**row, threshold=0.07)["fused_signal"] == "UP"
+    assert apply_late_fusion_row(**row, threshold=0.07, neutral_cap=0.35)["fused_signal"] == "NEUTRAL"

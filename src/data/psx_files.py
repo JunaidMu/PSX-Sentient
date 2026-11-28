@@ -55,6 +55,23 @@ def download_day(date: str, out_dir: Path, session: requests.Session | None = No
     return paths
 
 
+def download_file(date: str, key: str, out_dir: Path, session: requests.Session | None = None) -> Path | None:
+    """Download one daily file (e.g. key='market_summary') for `date`; cached, None if unavailable."""
+    folder, ext = FILES[key]
+    target = out_dir / f"{key}.{ext}"
+    if target.exists() and target.stat().st_size > 0:
+        return target
+    try:
+        resp = (session or requests).get(f"{BASE_URL}/{folder}/{date}.{ext}", headers=HEADERS, timeout=60)
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200 or len(resp.content) <= 100 or resp.content.lstrip().startswith(b"<"):
+        return None
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(resp.content)
+    return target
+
+
 def parse_market_summary(path: Path) -> pd.DataFrame:
     """Official closing prices for every listed equity (futures contracts like OGDC-DECB dropped)."""
     with zipfile.ZipFile(path) as zf:
@@ -74,13 +91,15 @@ def parse_off_market(path: Path) -> pd.DataFrame:
     text = path.read_text(encoding="latin-1")
     deal_lines = [ln for ln in text.splitlines() if re.match(r"^\d{2}-[A-Za-z]{3}-\d{2},", ln.strip())]
     if not deal_lines:
-        return pd.DataFrame(columns=["symbol", "company", "volume", "rate", "value"])
+        return pd.DataFrame(columns=["date", "settlement", "symbol", "company", "volume", "rate", "value"])
     df = pd.read_csv(StringIO("\n".join(deal_lines)), header=None,
                      names=["date", "settlement", "members", "symbol", "company", "volume", "rate", "value"])
     df["symbol"] = df["symbol"].astype(str).str.strip()
+    df["date"] = df["date"].astype(str).str.strip()
+    df["settlement"] = df["settlement"].astype(str).str.strip()
     for c in ("volume", "rate", "value"):
         df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df[["symbol", "company", "volume", "rate", "value"]].dropna(subset=["volume", "rate"])
+    return df[["date", "settlement", "symbol", "company", "volume", "rate", "value"]].dropna(subset=["volume", "rate"])
 
 
 def parse_futures_oi(path: Path) -> pd.DataFrame:

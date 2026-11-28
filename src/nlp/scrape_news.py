@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import requests
 
-from src.nlp.entity_mapper import map_headlines_df
+from src.nlp.entity_mapper import collapse_near_duplicates, is_junk_headline, map_headlines_df
 
 BUSINESS_RECORDER_RSS_URL = "https://www.brecorder.com/feeds/latest-news"
 GOOGLE_NEWS_PSX_RSS_URL = (
@@ -226,5 +226,6 @@ def fetch_all_psx_news(
         return pd.DataFrame(columns=["date", "source", "title", "title_md5", "symbol"])
 
     raw_df = pd.DataFrame(records)
+    raw_df = raw_df[~raw_df["title"].map(is_junk_headline)]  # quote/profile pages and sports stories
     mapped_df = map_headlines_df(raw_df, explode_multi_symbol=True)
-    return mapped_df
+    return collapse_near_duplicates(mapped_df).reset_index(drop=True)  # one row per story per symbol

@@ -109,8 +109,8 @@
         "recall_up": 0.31757575757575757,
         "f1_up": 0.2924107142857143
       },
-      "model_path": "models/lightgbm_model.pkl",
-      "mlflow_run_id": "0bd847e822b549c0a39cc32b03ff5bec"
+      "model_path": "models\\lightgbm_model.pkl",
+      "mlflow_run_id": "5d154cc24ea243e986c4dd4b41365049"
     },
     "CatBoost": {
       "folds": {
@@ -190,14 +190,14 @@
         "recall_up": 0.3527272727272727,
         "f1_up": 0.31682090364725096
       },
-      "model_path": "models/catboost_model.pkl",
-      "mlflow_run_id": "f007be9d635149338f475878bb5796e7"
+      "model_path": "models\\catboost_model.pkl",
+      "mlflow_run_id": "f4e58fffd188411fb5394b53a49a87bb"
     }
   },
   "best_model": "CatBoost",
   "registered_model": {
     "name": "psx-sentient-direction",
-    "version": "1",
-    "alias": "champion"
+    "version": "7",
+    "alias": "candidate"
   }
 }

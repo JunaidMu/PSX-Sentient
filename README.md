@@ -112,15 +112,15 @@ GitHub Actions: unit tests → DVC pull + validation + retrain → evaluation ga
 
 | Requirement | Implementation |
 | :--- | :--- |
-| Serving API + UI | `src/api/main.py` (FastAPI), `src/api/app.py` (Streamlit); live inputs = stock/date or an editable 27-feature vector |
+| Serving API + UI | `src/api/main.py` (FastAPI) behind nginx, web app in `web/` (Streamlit `src/api/app.py` kept as backup); live inputs = stock/date or an editable 27-feature vector; admin endpoints need `X-Admin-Key` |
 | Explanations | Per-prediction SHAP (native CatBoost/LightGBM), class probabilities and confidence |
-| Late fusion (proposal) | `src/models/stacking.py` meta-learner over LightGBM + CatBoost probabilities; conflict-veto gate on live FinBERT/entered sentiment |
+| Late fusion (proposal) | `src/models/stacking.py` meta-learner over LightGBM + CatBoost probabilities; conflict-veto gate on live FinBERT/entered sentiment; final-signal threshold tuned on validation (`src/models/signal_policy.py`) |
 | Eval-gated CI/CD | `.github/workflows/ci-cd.yml` + `src/monitoring/gate.py`: blocks deploy if Test_2026 metrics fall below `models/production_benchmark.json` |
 | Live observability | Prometheus metrics (latency, error rate, prediction mix, confidence, PSI per feature), Grafana dashboard + alert rules (`monitoring/`), CloudWatch logs |
 | Drift detection | `src/monitoring/drift.py`: PSI + KS per feature and predicted-class PSI, on the new batch or on served inputs |
 | Closed-loop retraining | `src/monitoring/loop.py` / `retrain.py`: weekly (Saturday) retraining when drift vs. the champion's own training data fires or after ~4 weeks of new data, urgent mid-week retrain for severe drift, one-week cooldown; Optuna-tuned challenger trained on everything up to ~6 weeks ago, compared with the champion on the latest ~6 weeks → promote, `previous_champion` kept for `--rollback` |
 | Backups & data versions | `src/monitoring/backup.py`: daily MLflow registry backup + data-version snapshot to S3; `scripts/commit_data_pointers.sh`: DVC pointers committed to the git `data` branch; Phase-1 download scripts in `scripts/phase1/` |
-| Deployment | `Dockerfile`, `docker-compose.yml`, `docker-compose.aws.yml`, `deploy/AWS_DEPLOY.md` |
+| Deployment & security | `Dockerfile`, `docker-compose.yml`, `docker-compose.aws.yml`, `deploy/AWS_DEPLOY.md`; MLflow and Prometheus only reachable through nginx with a login, Grafana admin password and API admin key from the server's `.env` |
 
 ### Results on the new batch (Jul–Nov 2026)
 
@@ -143,10 +143,24 @@ GitHub Actions: unit tests → DVC pull + validation + retrain → evaluation ga
 
 These sources are **context, not model inputs** — there is no history to train on yet; the daily archive builds it.
 
+### Signal policy (when the site says UP / DOWN)
+
+The proposal's conviction threshold (|C_t| > 0.20) fired on under 1% of validation stock-days, so almost every
+signal was NEUTRAL. `src/models/signal_policy.py` tunes it on the 2023–25 walk-forward predictions only (most
+precise threshold with at least 15% active days) → **0.08**. On Test 2026 that calls UP/DOWN on 35% of stock-days
+with 29.8% precision, versus 28.5% for the model's raw argmax and 5% activity for the untuned 0.20 rule.
+
+### Data quality safeguards (live)
+
+- Recent sessions come from the **official PSX closing file**; the psxdata API can lag or cache intraday snapshots.
+- News: aggregator duplicates collapsed to one story, quote/profile pages and sports results dropped, ambiguous
+  tickers disambiguated (e.g. Lucky's mining NRL vs. National Refinery).
+- Whale score uses only spot-like off-market deals (settling within T+3); forward deals carry a financing premium.
+
 ### Honest limitations
 
 - **News sentiment and the veto run live only.** No 2017–2026 news archive exists, so their effect on accuracy cannot be
-  measured yet; the old 69.77% "fusion" figure in `models/ablation_metrics.json` came from simulated sentiment and is not a result.
+  measured yet. An earlier 69.77% "fusion" figure came from simulated sentiment; that code and its outputs were removed.
 - Dividend days are detected heuristically, not from real dividend history.
 - Off-market (NDM), futures, short-sell and news data are not model inputs (no training history yet).
 - The target is close-to-close, but a 09:00 PKT signal can only be acted on at the 09:30 open, so part of the

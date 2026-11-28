@@ -89,24 +89,22 @@ stages:
       hash: md5
       md5: b890792e8c75a63d264d65ddcdda43d7
       size: 5282
-      isexec: true
     - path: src/models/tracking.py
       hash: md5
-      md5: a09c3a1e130b0b121ced0c168ec928b8
-      size: 4213
-      isexec: true
+      md5: 554cab6cfbdc6efdf102bd6aeb9fe9e7
+      size: 4490
     outs:
     - path: models/baseline_metrics.json
       hash: md5
-      md5: 99f089c5f88ac558a663b2ddf1a4f4ee
-      size: 8961
+      md5: bffa9e6ee25841c73de6218ef897e143
+      size: 9201
   train:
     cmd: python -m src.models.train_baseline
     deps:
     - path: models/baseline_metrics.json
       hash: md5
-      md5: 99f089c5f88ac558a663b2ddf1a4f4ee
-      size: 8961
+      md5: bffa9e6ee25841c73de6218ef897e143
+      size: 9201
     - path: psx_historical_data/feature_store.parquet
       hash: md5
       md5: 34c581845bfa65c89957754f2bf79f8c
@@ -117,65 +115,82 @@ stages:
       size: 1137
     - path: src/models/tracking.py
       hash: md5
-      md5: a09c3a1e130b0b121ced0c168ec928b8
-      size: 4213
-      isexec: true
+      md5: 554cab6cfbdc6efdf102bd6aeb9fe9e7
+      size: 4490
     - path: src/models/train_baseline.py
       hash: md5
-      md5: aef2d7f2d88ba60c82be77928729d172
-      size: 22396
-      isexec: true
+      md5: 157688c7c04488ea28be399bb7b063ca
+      size: 22527
     outs:
     - path: models/all_models_test_2026_predictions.parquet
       hash: md5
-      md5: caf900b64901dd02900ca1c14e3d35d1
+      md5: fe945dac9b77c625ba42152b4be80142
       size: 286327
     - path: models/best_model.pkl
       hash: md5
-      md5: 86427714252af17c4edc572f481b79b5
-      size: 1133942
+      md5: ff120dc9e742405e27e8ea678af858f9
+      size: 1133966
     - path: models/catboost_model.pkl
       hash: md5
-      md5: 86427714252af17c4edc572f481b79b5
-      size: 1133942
+      md5: ff120dc9e742405e27e8ea678af858f9
+      size: 1133966
     - path: models/lightgbm_model.pkl
       hash: md5
-      md5: cce4414eb9133cd87375f157e69e4bf1
+      md5: f5e06d590300f7c4de222a7f9f8f976d
       size: 2315260
     - path: models/model_comparison_metrics.json
       hash: md5
-      md5: e1a4d99c44ad4d77e70a53f325dc467f
-      size: 7459
+      md5: 77f78ba2d108015c8860afdc0179785c
+      size: 7664
     - path: models/test_2026_predictions.parquet
       hash: md5
       md5: a2317423b21191be9ea39b10148278dd
       size: 145227
     - path: models/val_oof_predictions.parquet
       hash: md5
-      md5: 8e7aed3078faa01e435dce3aa0936100
+      md5: dbe42cd9223b902b93221b9848f42229
       size: 1811794
   stacking:
     cmd: python -m src.models.stacking
     deps:
     - path: models/all_models_test_2026_predictions.parquet
       hash: md5
-      md5: caf900b64901dd02900ca1c14e3d35d1
+      md5: fe945dac9b77c625ba42152b4be80142
       size: 286327
     - path: models/val_oof_predictions.parquet
       hash: md5
-      md5: 8e7aed3078faa01e435dce3aa0936100
+      md5: dbe42cd9223b902b93221b9848f42229
       size: 1811794
     - path: src/models/stacking.py
       hash: md5
       md5: 4c318dca2ddc8c8c9873353507aec237
       size: 4985
-      isexec: true
     outs:
     - path: models/stacking_meta.pkl
       hash: md5
-      md5: 5f1e3b419762229a00a855cb3ac44a1e
+      md5: ba949a9279a1d78cad12f661ce2ef03d
       size: 1407
     - path: models/stacking_metrics.json
       hash: md5
-      md5: 3fad372047423af78b33ac6398e21dac
-      size: 4142
+      md5: 3ac0848125c8a37fa748ce3c78fafcd4
+      size: 4256
+  signal_policy:
+    cmd: python -m src.models.signal_policy
+    deps:
+    - path: models/test_2026_predictions.parquet
+      hash: md5
+      md5: a2317423b21191be9ea39b10148278dd
+      size: 145227
+    - path: models/val_oof_predictions.parquet
+      hash: md5
+      md5: dbe42cd9223b902b93221b9848f42229
+      size: 1811794
+    - path: src/models/signal_policy.py
+      hash: md5
+      md5: 57525530bfa9077129dc0663d11e7641
+      size: 3782
+    outs:
+    - path: models/signal_policy.json
+      hash: md5
+      md5: f73f7f0824b783429b1ca9e3bc8fc0e4
+      size: 519

@@ -37,3 +37,9 @@ Submission/
 /psx_historical_data/news
 reports/premarket_latest.json
 /Daily Downloads PSX Website/
+deploy/htpasswd
+# Runtime reports regenerated on the server (validation_*.json stay tracked as DVC metrics)
+reports/drift_report.json
+reports/retrain_decision.json
+reports/gate_result.json
+reports/new_batch_fetch.json

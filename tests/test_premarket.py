@@ -63,3 +63,33 @@ def test_previous_trading_day_skips_weekends() -> None:
 
     assert previous_trading_day(datetime(2026, 11, 30, 9, 0, tzinfo=PKT)) == "2026-11-27"  # Monday -> Friday
     assert previous_trading_day(datetime(2026, 11, 26, 9, 0, tzinfo=PKT)) == "2026-11-25"
+
+
+def test_news_quality_filters() -> None:
+    import pandas as pd
+
+    from src.nlp.entity_mapper import collapse_near_duplicates, is_junk_headline, map_headline_entities
+
+    assert is_junk_headline("HBL Company Profile - Habib Bank Ltd - Investify")
+    assert is_junk_headline("Khalid Usman's 10-wicket haul helps MIT Solutions beat OGDCL by 75 runs")
+    assert not is_junk_headline("OGDCL makes gas discovery in Sindh")
+    assert map_headline_entities("Lucky Cement-backed NRL confirms 8 copper-gold discoveries") == ["LUCK"]
+    assert map_headline_entities("National Refinery profit falls") == ["NRL"]
+    df = pd.DataFrame({"symbol": ["ATRL"] * 3, "title": [
+        "Attock Refinery to shut main crude distillation unit for 5-6 days - Mettis Global",
+        "Attock Refinery to shut main crude distillation unit for 5-6 days - Investify",
+        "Attock Refinery posts record quarterly profit"]})
+    assert len(collapse_near_duplicates(df)) == 2
+
+
+def test_whale_score_ignores_forward_settlement_deals() -> None:
+    import pandas as pd
+
+    from src.data.whale import whale_scores
+
+    deals = pd.DataFrame({
+        "date": ["27-Nov-26", "27-Nov-26"], "settlement": ["30-Nov-26", "28-Dec-26"],
+        "symbol": ["KOHC", "KOHC"], "volume": [100_000, 900_000], "rate": [95.0, 99.0]})
+    res = whale_scores(deals, close={"KOHC": 95.0}, vol20={"KOHC": 1_000_000})["KOHC"]
+    assert res["deals"] == 1 and res["forward_deals"] == 1 and res["forward_volume"] == 900_000
+    assert res["ndm_deal_rate"] == 95.0 and res["W_ndm"] == 0.0  # the forward premium is not counted

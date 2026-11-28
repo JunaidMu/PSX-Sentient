@@ -78,10 +78,51 @@ _COMPILED_PATTERNS: dict[str, list[re.Pattern[str]]] = {
 }
 
 
+# Search-result pages that are not news (stock profile / quote / analysis pages) and sports stories that
+# only mention a company-sponsored team.
+_JUNK_PATTERNS = re.compile(
+    r"\b(company profile|share price today|stock price today|competitors|technical analysis|stock discussion|"
+    r"investor sentiment|historical data|stock quote|price target|dividend history|financial statements)\b"
+    r"|\b(wickets?|innings|runs? (win|victory|defeat)|by \d+ runs|cricket|trophy|tournament|football|hockey|"
+    r"squash|kabaddi|beat .* by \d+)\b",
+    flags=re.IGNORECASE,
+)
+# "NRL" is also National Resources Ltd (Lucky Cement's mining venture), not National Refinery
+_NRL_NOT_REFINERY = re.compile(r"\b(copper|gold|mineral|mining|chagai|national resources|lucky cement-backed)\b", re.IGNORECASE)
+
+
+def strip_source_suffix(title: str) -> str:
+    """'Attock Refinery to shut unit - Investify' -> 'Attock Refinery to shut unit' (news-aggregator suffix)."""
+    parts = str(title).rsplit(" - ", 1)
+    return parts[0].strip() if len(parts) == 2 and len(parts[1]) <= 40 else str(title).strip()
+
+
+def is_junk_headline(title: str) -> bool:
+    return bool(_JUNK_PATTERNS.search(str(title)))
+
+
 def normalize_title(title: str) -> str:
-    """Normalize headline text for deterministic MD5 hashing."""
-    cleaned = re.sub(r"\s+", " ", str(title).strip().lower())
-    return cleaned
+    """Normalize headline text for deterministic MD5 hashing (source suffix removed, case/space folded)."""
+    cleaned = re.sub(r"\s+", " ", strip_source_suffix(title).lower())
+    return re.sub(r"[^\w\s%]", "", cleaned).strip()
+
+
+def collapse_near_duplicates(df: pd.DataFrame, threshold: float = 0.70) -> pd.DataFrame:
+    """Keep one headline per story: drop titles (per symbol) that closely repeat an earlier one."""
+    from difflib import SequenceMatcher
+
+    if df.empty:
+        return df
+    keep = []
+    seen: dict[str, list[str]] = {}
+    for idx, row in df.iterrows():
+        norm = normalize_title(row["title"])
+        prior = seen.setdefault(str(row.get("symbol", "")), [])
+        if any(SequenceMatcher(None, norm, p).ratio() >= threshold for p in prior):
+            continue
+        prior.append(norm)
+        keep.append(idx)
+    return df.loc[keep]
 
 
 def compute_title_md5(title: str) -> str:
@@ -97,6 +138,8 @@ def map_headline_entities(title: str) -> list[str]:
     for sym, patterns in _COMPILED_PATTERNS.items():
         if any(p.search(text) for p in patterns):
             matched.append(sym)
+    if "NRL" in matched and _NRL_NOT_REFINERY.search(text) and not re.search(r"national refinery", text, re.I):
+        matched.remove("NRL")
     return matched if matched else ["MACRO"]
 
 

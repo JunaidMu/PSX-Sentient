@@ -105,7 +105,8 @@ def run(mode: str = "weekly", skip_fetch: bool = False, force_retrain: bool = Fa
         api = os.environ.get("API_URL")
         if api and decision["decision"] == "promoted":
             try:
-                summary["api_reload"] = requests.post(f"{api}/model/reload", timeout=60).json()
+                summary["api_reload"] = requests.post(f"{api}/model/reload", timeout=60,
+                                                      headers={"X-Admin-Key": os.environ.get("ADMIN_API_KEY", "")}).json()
             except Exception as exc:
                 summary["api_reload"] = f"failed: {exc}"
     return summary

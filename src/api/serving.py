@@ -86,7 +86,11 @@ class FeatureStore:
             raise KeyError(f"Unknown symbol {symbol}")
         if date is None:
             return sub.iloc[-1]
-        hit = sub[sub["date"] == pd.Timestamp(date)]
+        try:
+            when = pd.Timestamp(date)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"Invalid date '{date}', expected YYYY-MM-DD") from exc
+        hit = sub[sub["date"] == when]
         if hit.empty:
             raise KeyError(f"No trading data for {symbol} on {date}")
         return hit.iloc[0]
@@ -122,8 +126,10 @@ def predict_features(features: dict[str, float], sentiment: float | None = None,
     shap = shap_values(CHAMPION.model, X, model_class)
     top = sorted(shap.items(), key=lambda kv: abs(kv[1]), reverse=True)[:top_k]
 
+    policy = signal_policy()
     fused = apply_late_fusion_row(P_down=proba[0], P_neutral=proba[1], P_up=proba[2],
-                                  S_t=0.0 if sentiment is None else sentiment)
+                                  S_t=0.0 if sentiment is None else sentiment,
+                                  threshold=policy["conviction_threshold"], neutral_cap=policy["neutral_cap"])
     return {
         "probabilities": {"DOWN": round(proba[0], 4), "NEUTRAL": round(proba[1], 4), "UP": round(proba[2], 4)},
         "model_signal": SIGNALS[model_class],
@@ -138,10 +144,22 @@ def predict_features(features: dict[str, float], sentiment: float | None = None,
             "top_features": [{"feature": f, "shap": round(v, 5), "value": round(float(X.iloc[0][f]), 6)} for f, v in top],
         },
         "model": {k: CHAMPION.info.get(k) for k in ("name", "version", "alias", "model_type")},
+        "policy": {"conviction_threshold": policy["conviction_threshold"], "neutral_cap": policy["neutral_cap"]},
     }
 
 
 PREMARKET_SNAPSHOT = Path("reports/premarket_latest.json")
+_POLICY_CACHE: dict[str, Any] = {}
+
+
+def signal_policy() -> dict[str, Any]:
+    """Final-signal thresholds tuned on validation (models/signal_policy.json), reloaded when it changes."""
+    from src.models.signal_policy import POLICY_PATH, load_policy
+
+    stamp = POLICY_PATH.stat().st_mtime if POLICY_PATH.exists() else 0
+    if _POLICY_CACHE.get("stamp") != stamp:
+        _POLICY_CACHE.update(stamp=stamp, policy=load_policy())
+    return _POLICY_CACHE["policy"]
 
 
 def premarket_snapshot() -> dict[str, Any] | None:

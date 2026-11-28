@@ -1,0 +1,21 @@
+{
+  "conviction_threshold": 0.08,
+  "neutral_cap": 0.5,
+  "source": "tuned on CatBoost walk-forward validation 2023-2025 (min active rate 15%)",
+  "validation": {
+    "active_rate": 0.172,
+    "active_precision": 0.2637
+  },
+  "test_2026": {
+    "active_rate": 0.3473,
+    "active_precision": 0.2976
+  },
+  "test_2026_proposal_default_0.20": {
+    "active_rate": 0.0501,
+    "active_precision": 0.3464
+  },
+  "test_2026_model_argmax": {
+    "active_rate": 0.542,
+    "active_precision": 0.2853
+  }
+}

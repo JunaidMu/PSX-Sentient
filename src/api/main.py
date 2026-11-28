@@ -15,6 +15,7 @@ Endpoints
 
 from __future__ import annotations
 
+from functools import lru_cache
 import json
 import os
 from pathlib import Path
@@ -25,7 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from prometheus_client import Counter, Gauge, Histogram
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
@@ -46,6 +47,13 @@ ENABLE_NLP = os.environ.get("ENABLE_NLP", "0") == "1"
 DRIFT_REPORT = Path("reports/drift_report.json")
 RETRAIN_DECISION = Path("reports/retrain_decision.json")
 MIN_ROWS_FOR_DRIFT = 150
+ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "")
+
+
+def require_admin(x_admin_key: str | None = Header(default=None)) -> None:
+    """Admin endpoints need the X-Admin-Key header when ADMIN_API_KEY is configured (always on the server)."""
+    if ADMIN_API_KEY and x_admin_key != ADMIN_API_KEY:
+        raise HTTPException(401, "Admin key required (X-Admin-Key header)")
 
 app = FastAPI(
     title="PSX-Sentient API",
@@ -132,11 +140,19 @@ def model_info() -> dict[str, Any]:
     return out
 
 
-@app.post("/model/reload")
+@app.post("/model/reload", dependencies=[Depends(require_admin)])
 def reload_model() -> dict[str, Any]:
     info = CHAMPION.load()
     _publish_model_version()
     return {"reloaded": True, "served": info}
+
+
+@lru_cache(maxsize=1)
+def _finbert():
+    """FinBERT is loaded once per process (it is ~400 MB) and reused for every headline."""
+    from src.nlp.finbert_engine import FinBERTSentimentEngine
+
+    return FinBERTSentimentEngine(device="cpu")
 
 
 def _sentiment_for(req: PredictRequest, symbol: str | None, is_latest: bool) -> tuple[float | None, str]:
@@ -146,9 +162,7 @@ def _sentiment_for(req: PredictRequest, symbol: str | None, is_latest: bool) -> 
     if req.headline:
         if not ENABLE_NLP:
             raise HTTPException(400, "Headline scoring needs ENABLE_NLP=1; pass `sentiment` instead.")
-        from src.nlp.finbert_engine import FinBERTSentimentEngine
-
-        score = FinBERTSentimentEngine(device="cpu").score_texts([req.headline])["sentiment_score"].iloc[0]
+        score = _finbert().score_texts([req.headline])["sentiment_score"].iloc[0]
         return float(score), "headline (FinBERT)"
     if symbol and is_latest:
         ctx = premarket_context(symbol)
@@ -171,8 +185,10 @@ def predict(req: PredictRequest) -> dict[str, Any]:
             raise HTTPException(404, f"{sym} is not one of the 30 tracked KSE-100 stocks")
         try:
             row = FEATURES.row(sym, req.date)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
         except KeyError as exc:
-            raise HTTPException(404, str(exc)) from exc
+            raise HTTPException(404, str(exc).strip("'")) from exc
         features = {c: float(row[c]) for c in FEATURE_COLUMNS}
         meta = {"symbol": sym, "date": str(row["date"].date()), "input": "feature_store",
                 "close": float(row["close"]) if "close" in row else None}
@@ -198,8 +214,10 @@ def features_for(symbol: str, date: str | None = None) -> dict[str, Any]:
     """The stored 27-feature vector for a stock/date (starting point for live what-if inputs)."""
     try:
         row = FEATURES.row(symbol.strip().upper(), date)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     except KeyError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise HTTPException(404, str(exc).strip("'")) from exc
     return {"symbol": symbol.upper(), "date": str(row["date"].date()),
             "features": {c: float(row[c]) for c in FEATURE_COLUMNS}}
 
@@ -244,7 +262,7 @@ def drift_report() -> dict[str, Any]:
     return json.loads(DRIFT_REPORT.read_text(encoding="utf-8"))
 
 
-@app.post("/drift/check")
+@app.post("/drift/check", dependencies=[Depends(require_admin)])
 def drift_check(last_n: int = 3000) -> dict[str, Any]:
     """Compare the most recently *served* inputs with the champion's training distribution."""
     from src.monitoring.drift import run_drift_check

@@ -29,7 +29,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from src.data.live_updater import compute_whale_block_metric
+from src.data.whale import whale_scores
 from src.data.psx_files import download_day, parse_day
 from src.nlp.entity_mapper import KSE30_SYMBOLS, compute_title_md5
 
@@ -117,9 +117,16 @@ def sentiment_by_symbol(archive: pd.DataFrame, as_of: str) -> dict[str, dict[str
 
     if archive.empty:
         return {}
+    from src.nlp.entity_mapper import collapse_near_duplicates, is_junk_headline, map_headline_entities
+
     df = archive.dropna(subset=["sentiment_score"]).copy()
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df[df["date"] <= pd.Timestamp(as_of) + pd.Timedelta(days=1)]  # include overnight news
+    # Apply the current quality rules to the whole archive (older rows were collected before them):
+    # drop junk/sports, drop symbol matches the mapper no longer makes, one row per story per symbol.
+    df = df[~df["title"].map(is_junk_headline)]
+    df = df[[sym == "MACRO" or sym in map_headline_entities(t) for sym, t in zip(df["symbol"], df["title"])]]
+    df = collapse_near_duplicates(df.sort_values("date", ascending=False))
     if df.empty:
         return {}
     daily = compute_daily_ewma_sentiment(df, span=3)
@@ -170,12 +177,8 @@ def run(date: str | None = None, with_news: bool = True) -> dict[str, Any]:
     whales: dict[str, dict[str, Any]] = {}
     om = parsed["off_market"]
     if not om.empty:
-        om = om[om["symbol"].isin(ours)]
-        for sym, g in om.groupby("symbol"):
-            vwap = float((g["volume"] * g["rate"]).sum() / g["volume"].sum())
-            if sym in close and sym in vol20:
-                whales[sym] = compute_whale_block_metric(float(g["volume"].sum()), vwap, float(close[sym]), vol20[sym])
-                whales[sym]["deals"] = int(len(g))
+        # spot-like deals only; forward-settling deals carry a financing premium (see src/data/whale.py)
+        whales = whale_scores(om[om["symbol"].isin(ours)], close, vol20)
 
     fut = parsed["futures_oi"]
     fut = fut.set_index("symbol").to_dict("index") if not fut.empty else {}

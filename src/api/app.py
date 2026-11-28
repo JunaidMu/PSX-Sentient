@@ -92,7 +92,7 @@ with tab_sig:
     st.caption("News S_t, whale and futures columns come from the 09:00 PKT pre-market job. They are context and "
                "feed the veto/blending rule, but are not model inputs (no training history yet).")
     st.caption("Model call = most likely class. Final signal = late-fusion rule: an UP/DOWN call needs net edge "
-               "|0.75·(P_up−P_down) + 0.25·S_t| > 0.20 and P(NEUTRAL) < 0.50, and is vetoed to NEUTRAL when "
+               "|0.75·(P_up−P_down) + 0.25·S_t| above the threshold tuned on 2023–25 validation and P(NEUTRAL) < 0.50, and is vetoed to NEUTRAL when "
                "news sentiment strongly contradicts it.")
 
 with tab_pred:

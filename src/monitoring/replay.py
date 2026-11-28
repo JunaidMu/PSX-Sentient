@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 
 import pandas as pd
@@ -35,7 +36,7 @@ def replay(api: str, days: int | None = None, delay: float = 0.0) -> dict:
             time.sleep(delay)
         if i % 20 == 0:
             print(f"  replayed {i}/{len(dates)} trading days ({sent} predictions)")
-    drift = session.post(f"{api}/drift/check", timeout=300)
+    drift = session.post(f"{api}/drift/check", timeout=300, headers={"X-Admin-Key": os.environ.get("ADMIN_API_KEY", "")})
     return {"days": len(dates), "predictions": sent, "errors": errors,
             "drift": drift.json() if drift.status_code == 200 else drift.text}
 

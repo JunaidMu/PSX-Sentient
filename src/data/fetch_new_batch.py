@@ -1,7 +1,8 @@
 """Fetch the post-cutoff "new batch" (2026-07-01 -> today) in the same schema as the history.
 
 Sources
-- Prices: psxdata REST API (same source as the 2017-2026 history), all 30 symbols.
+- Prices: psxdata REST API (same source as the 2017-2026 history), all 30 symbols; for the most recent
+          sessions (and any session psxdata has incomplete) the official PSX closing file replaces it.
 - Macro:  Brent / USD-PKR / dollar index from Yahoo Finance or FRED. For each series every candidate
           source is compared with the values already in `stocks_with_macro.csv` over the overlap
           window (June 2026); the source that reproduces the history is used, so the new batch is
@@ -26,6 +27,7 @@ import numpy as np
 import pandas as pd
 import requests
 
+from src.data.psx_files import download_file, parse_market_summary
 from src.nlp.entity_mapper import KSE30_SYMBOLS
 
 HISTORY_PATH = Path("psx_historical_data/stocks_with_macro.csv")
@@ -45,6 +47,8 @@ MACRO_CANDIDATES: dict[str, list[tuple[str, str]]] = {
 MAX_OVERLAP_MISMATCH = 0.01  # mean absolute relative difference allowed vs. history
 MIN_SYMBOLS_PER_SESSION = 27  # a complete PSX session has data for (almost) all 30 symbols
 MIN_VOLUME_RATIO = 0.2  # median volume below 20% of the trailing norm = partial/intraday snapshot
+RECENT_OFFICIAL_DAYS = 7  # recent business days always taken from the official PSX closing file
+DAILY_DIR = Path("psx_historical_data/daily")
 
 
 RAW_CACHE_DIR = NEW_BATCH_DIR / "raw"
@@ -156,6 +160,27 @@ def build_new_batch(end: str | None = None) -> tuple[pd.DataFrame, dict]:
     incomplete = coverage.index[(coverage < MIN_SYMBOLS_PER_SESSION) | (med_vol < MIN_VOLUME_RATIO * norm_vol)]
     new = new[~new["date"].isin(incomplete)]
 
+    #    The official PSX closing file (Market Summary) is the source of truth for recent sessions: the
+    #    psxdata cache can lag or hold an intraday snapshot. It replaces psxdata for the last
+    #    RECENT_OFFICIAL_DAYS business days and for any session psxdata had incomplete or missing.
+    official_dates = set(pd.bdate_range(end=pd.Timestamp(end), periods=RECENT_OFFICIAL_DAYS)) | set(incomplete)
+    official_rows = []
+    for d in sorted(x for x in official_dates if x > cutoff):
+        day = pd.Timestamp(d).strftime("%Y-%m-%d")
+        path = download_file(day, "market_summary", DAILY_DIR / day)
+        if path is None:
+            continue  # holiday, weekend, or not published yet
+        ms = parse_market_summary(path)
+        ms = ms[ms["symbol"].isin(KSE30_SYMBOLS)]
+        if ms["symbol"].nunique() >= MIN_SYMBOLS_PER_SESSION:
+            official_rows.append(ms[["symbol", "date", "open", "high", "low", "close", "volume"]].assign(is_anomaly=False))
+    official_used = []
+    if official_rows:
+        official = pd.concat(official_rows, ignore_index=True)
+        official_used = sorted({str(x.date()) for x in official["date"]})
+        new = pd.concat([new[~new["date"].isin(official["date"])], official], ignore_index=True)
+    incomplete = [d for d in incomplete if str(pd.Timestamp(d).date()) not in official_used]
+
     # 3. Same raw schema as stocks_with_macro.csv (no splits after the cutoff -> factor 1.0)
     for col in ("open", "high", "low", "close", "volume"):
         new[f"original_{col}"] = new[col]
@@ -187,7 +212,8 @@ def build_new_batch(end: str | None = None) -> tuple[pd.DataFrame, dict]:
         "rows": int(len(new)),
         "symbols": int(new["symbol"].nunique()),
         "overlap_max_price_mismatch": price_mismatch,
-        "dropped_incomplete_sessions": [str(d.date()) for d in incomplete],
+        "dropped_incomplete_sessions": [str(pd.Timestamp(d).date()) for d in incomplete],
+        "official_psx_sessions_used": official_used,
         "macro_sources": macro_report,
         "missing_macro_cells": int(new[list(MACRO_CANDIDATES)].isna().sum().sum()),
     }
