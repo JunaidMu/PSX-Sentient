@@ -22,10 +22,6 @@ models/*.parquet
 models/*.csv
 models/finbert_cache/
 
-# One-off data exploration / scraping helper scripts
-fetch_psx_data.py
-audit_historical_data.py
-missedsplit_bonus.py
 
 # Deliverable 2 runtime state (data is DVC-tracked; these are regenerated)
 psx_historical_data/new_batch/raw/

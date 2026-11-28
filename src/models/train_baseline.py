@@ -485,6 +485,8 @@ def run_phase3_pipeline(
                 "val_mean_macro_f1": f"{best['val_mean']['macro_f1']:.4f}",
                 "test_2026_macro_f1": f"{best['test_2026']['macro_f1']:.4f}",
                 "mlflow_run_id": run_ids[best_model_name],
+                "train_end": str(pd.Timestamp(test_fold.train_dates[-1]).date()),
+                "role": "trained by pipeline",
             },
         )
 

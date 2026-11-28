@@ -59,13 +59,20 @@ docker compose run --rm trainer python -m src.monitoring.retrain --rollback     
 curl -X POST localhost:8000/model/reload
 ```
 
-## 6. Daily pre-market job (09:00 PKT = 04:00 UTC, Monday–Friday)
+## 6. Schedules (server clock is UTC)
 `crontab -e` on the instance and add:
 ```
 0 4 * * 1-5 cd ~/PSX-Sentient && docker compose run --rm trainer sh scripts/premarket.sh >> logs/premarket.log 2>&1
+0 2 * * 6   cd ~/PSX-Sentient && docker compose run --rm trainer sh scripts/weekly_retrain.sh >> logs/weekly_retrain.log 2>&1
 ```
-It fetches the latest prices/macro, the five PSX daily files and overnight news, scores news with FinBERT,
-writes the pre-market snapshot the API and dashboard use, versions the raw files with DVC and runs the drift loop.
+- **Daily 09:00 PKT:** latest prices/macro, the five PSX daily files and overnight news (FinBERT), the pre-market
+  snapshot, DVC versioning (+ pointers to the git `data` branch), a drift check (retrains only for urgent drift),
+  and an S3 backup of the MLflow registry.
+- **Saturday 07:00 PKT:** weekly retraining check — retrains on drift vs. the champion's own training data or after
+  ~4 weeks of new data (never more than once per trading week), promotes only if better, backs up the registry.
+- Optional `GITHUB_DATA_TOKEN` in `.env` (fine-grained token, Contents read/write on this repo) enables the `data` branch.
+- Disaster recovery on a fresh server: `docker compose run --rm trainer python -m src.monitoring.backup --restore`
+  restores the registry; model files are already in S3 and data comes back with `dvc pull`.
 
 ## 7. CI/CD secrets (GitHub → Settings → Secrets and variables → Actions)
 `DAGSHUB_USER`, `DAGSHUB_TOKEN` (pipeline + gate), `EC2_HOST` (public IP), `EC2_USER` (`ubuntu`),

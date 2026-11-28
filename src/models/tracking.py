@@ -16,6 +16,7 @@ EXPERIMENT_NAME = "PSX_Phase3_Baseline_ML"
 REGISTERED_MODEL_NAME = "psx-sentient-direction"
 RAW_DATA_PATH = Path("psx_historical_data/stocks_with_macro.csv")
 CLEAN_DATA_PATH = Path("psx_historical_data/stocks_clean.csv")
+DEFAULT_TRAIN_END = "2025-12-31"  # the original pipeline's final model is trained on data up to end-2025
 
 
 def tracking_uri(mlruns_dir: Path = MLRUNS_DIR) -> str:
@@ -96,6 +97,8 @@ def load_registered_model(alias: str = "champion") -> tuple[Any, dict[str, str]]
         "alias": alias,
         "model_type": model_type,
         "run_id": mv.run_id or "",
+        # Last date of data the model was trained on (drift is measured against data up to here)
+        "train_end": (mv.tags or {}).get("train_end", DEFAULT_TRAIN_END),
     }
     return model, info
 

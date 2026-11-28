@@ -254,7 +254,8 @@ def drift_check(last_n: int = 3000) -> dict[str, Any]:
         raise HTTPException(409, f"Need at least {MIN_ROWS_FOR_DRIFT} served predictions, have {len(served)}")
     served["date"] = served["date"].fillna(served["ts"].str[:10])
     CHAMPION.ensure_loaded()
-    report = run_drift_check(served, model=CHAMPION.model)
+    report = run_drift_check(served, model=CHAMPION.model,
+                             reference_end=CHAMPION.info.get("train_end", "2025-12-31"))
     _publish_drift(report)
     return {k: v for k, v in report.items() if k != "features"}
 

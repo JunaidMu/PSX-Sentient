@@ -16,7 +16,9 @@ import pandas as pd
 from src.features.build_features import FEATURE_COLUMNS
 from src.monitoring import gate
 from src.monitoring.drift import detect_drift, psi
-from src.monitoring.retrain import PURGE_DAYS, _windows
+from src.monitoring.backup import bucket_name
+from src.monitoring.loop import decide_retrain
+from src.monitoring.retrain import COMPARE_DAYS, PURGE_DAYS, _windows
 
 
 def _frame(n: int, shift: float = 0.0, seed: int = 0) -> pd.DataFrame:
@@ -55,7 +57,9 @@ def test_retraining_windows_are_purged_and_disjoint() -> None:
     d = pd.DatetimeIndex(df["date"])
     gap = pd.bdate_range(d[w["es"]].max(), d[w["compare"]].min())
     assert len(gap) - 2 >= PURGE_DAYS  # at least PURGE_DAYS trading days strictly between them
-    assert d[w["compare"]].min() >= pd.Timestamp("2026-10-01")
+    # rolling: the comparison window is the most recent COMPARE_DAYS trading days
+    assert d[w["compare"]].nunique() == COMPARE_DAYS and d[w["compare"]].max() == dates.max()
+    assert w["data_end"] == str(dates.max().date())
 
 
 def test_gate_blocks_worse_model_and_passes_equal(tmp_path, monkeypatch) -> None:
@@ -70,3 +74,24 @@ def test_gate_blocks_worse_model_and_passes_equal(tmp_path, monkeypatch) -> None
 
     (tmp_path / "bench.json").write_text(json.dumps({"macro_f1": 0.42, "active_signal_precision": 0.28}))
     assert gate.evaluate()["passed"] is False
+
+
+def test_retraining_policy_cooldown_daily_weekly_and_force() -> None:
+    drift_high = {"drift_share": 0.6, "retrain_recommended": True}
+    drift_mid = {"drift_share": 0.3, "retrain_recommended": True}
+    drift_none = {"drift_share": 0.05, "retrain_recommended": False}
+    assert decide_retrain("weekly", drift_high, new_days=3)[0] is False       # cooldown: < 1 week of new data
+    assert decide_retrain("weekly", drift_mid, new_days=5)[0] is True         # weekly + drift rule
+    assert decide_retrain("weekly", drift_none, new_days=8)[0] is False       # no drift, not enough for refresh
+    assert decide_retrain("weekly", drift_none, new_days=25)[0] is True       # routine monthly refresh
+    assert decide_retrain("daily", drift_mid, new_days=10)[0] is False        # daily waits for the weekly run
+    assert decide_retrain("daily", drift_high, new_days=10)[0] is True        # ...unless drift is urgent
+    assert decide_retrain("daily", None, new_days=0, force=True)[0] is True   # manual override
+
+
+def test_backup_bucket_from_mlflow_destination(monkeypatch) -> None:
+    monkeypatch.delenv("BACKUP_BUCKET", raising=False)
+    monkeypatch.setenv("MLFLOW_ARTIFACTS_DESTINATION", "s3://psx-bucket/mlflow")
+    assert bucket_name() == "psx-bucket"
+    monkeypatch.setenv("MLFLOW_ARTIFACTS_DESTINATION", "/app/mlflow_server/artifacts")
+    assert bucket_name() is None

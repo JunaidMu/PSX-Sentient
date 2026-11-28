@@ -137,20 +137,27 @@ retrain if &ge; {DRIFT_SHARE_TRIGGER:.0%} of market features drift or class-mix 
     return True
 
 
-def load_reference(feature_store_path: Path = OUTPUT_PARQUET_PATH) -> pd.DataFrame:
-    ref = pd.read_parquet(feature_store_path)
+def load_reference(reference_end: str = REFERENCE_END, feature_store_path: Path | None = None) -> pd.DataFrame:
+    """Feature rows the serving model was trained on (dates up to `reference_end`)."""
+    from src.monitoring.batch import COMBINED_FEATURES_PATH
+
+    path = feature_store_path or (COMBINED_FEATURES_PATH if COMBINED_FEATURES_PATH.exists() else OUTPUT_PARQUET_PATH)
+    ref = pd.read_parquet(path)
     ref["date"] = pd.to_datetime(ref["date"])
-    return ref[ref["date"] <= REFERENCE_END].reset_index(drop=True)
+    return ref[ref["date"] <= pd.Timestamp(reference_end)].reset_index(drop=True)
 
 
-def run_drift_check(current: pd.DataFrame, model: Any | None = None, html: bool = True) -> dict[str, Any]:
-    reference = load_reference()
+def run_drift_check(current: pd.DataFrame, model: Any | None = None, html: bool = True,
+                    reference_end: str = REFERENCE_END) -> dict[str, Any]:
+    """Drift of `current` vs. the data the serving model was trained on (up to `reference_end`)."""
+    reference = load_reference(reference_end)
     ref_pred = cur_pred = None
     if model is not None:
         ref_sample = reference.sample(n=min(len(reference), 20000), random_state=42)
         ref_pred = np.argmax(model.predict_proba(ref_sample[FEATURE_COLUMNS]), axis=1)
         cur_pred = np.argmax(model.predict_proba(current[FEATURE_COLUMNS]), axis=1)
     result = detect_drift(reference, current, ref_pred, cur_pred)
+    result["reference_end"] = str(reference_end)
     result["html_report"] = str(REPORT_HTML) if html and write_html_report(result) else None
     REPORT_JSON.parent.mkdir(parents=True, exist_ok=True)
     REPORT_JSON.write_text(json.dumps(result, indent=2), encoding="utf-8")

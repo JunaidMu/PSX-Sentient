@@ -118,7 +118,8 @@ GitHub Actions: unit tests → DVC pull + validation + retrain → evaluation ga
 | Eval-gated CI/CD | `.github/workflows/ci-cd.yml` + `src/monitoring/gate.py`: blocks deploy if Test_2026 metrics fall below `models/production_benchmark.json` |
 | Live observability | Prometheus metrics (latency, error rate, prediction mix, confidence, PSI per feature), Grafana dashboard + alert rules (`monitoring/`), CloudWatch logs |
 | Drift detection | `src/monitoring/drift.py`: PSI + KS per feature and predicted-class PSI, on the new batch or on served inputs |
-| Closed-loop retraining | `src/monitoring/loop.py` / `retrain.py`: drift → Optuna-tuned challenger → champion vs challenger on an unseen window → promote, `previous_champion` kept for `--rollback` |
+| Closed-loop retraining | `src/monitoring/loop.py` / `retrain.py`: weekly (Saturday) retraining when drift vs. the champion's own training data fires or after ~4 weeks of new data, urgent mid-week retrain for severe drift, one-week cooldown; Optuna-tuned challenger trained on everything up to ~6 weeks ago, compared with the champion on the latest ~6 weeks → promote, `previous_champion` kept for `--rollback` |
+| Backups & data versions | `src/monitoring/backup.py`: daily MLflow registry backup + data-version snapshot to S3; `scripts/commit_data_pointers.sh`: DVC pointers committed to the git `data` branch; Phase-1 download scripts in `scripts/phase1/` |
 | Deployment | `Dockerfile`, `docker-compose.yml`, `docker-compose.aws.yml`, `deploy/AWS_DEPLOY.md` |
 
 ### Results on the new batch (Jul–Nov 2026)

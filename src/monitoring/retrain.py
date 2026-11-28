@@ -1,9 +1,10 @@
-"""Closed-loop retraining: train a challenger on data that includes the new batch, compare it with
-the registered champion on a fixed recent holdout neither model has seen, then promote or keep.
+"""Closed-loop retraining: train a challenger on all data up to a few weeks ago, compare it with the
+registered champion on the most recent weeks (which neither model has seen), then promote or keep.
 
-Windows (all purged by 5 trading days):
-- Challenger training : 2017 -> CHALLENGER_TRAIN_END (includes Jan-Sep 2026: Test_2026 + new batch)
-- Comparison holdout   : COMPARE_START -> latest labelled day (never seen by champion or challenger)
+Rolling windows (all purged by 5 trading days), recomputed on every run:
+- Comparison holdout   : the last COMPARE_DAYS labelled trading days (~6 weeks)
+- Challenger training : everything from 2017 up to the purge gap before the holdout
+Set CHALLENGER_TRAIN_END / COMPARE_START to pin fixed windows instead (reproducing a past run).
 
 Challenger = CatBoost with hyperparameters tuned by Optuna on an early-stopping slice carved from the
 end of its own training window (the holdout is never used for tuning).
@@ -39,8 +40,9 @@ from src.models.tracking import REGISTERED_MODEL_NAME, load_registered_model, lo
 from src.models.train_baseline import compute_classification_metrics
 from src.monitoring.batch import COMBINED_FEATURES_PATH
 
-CHALLENGER_TRAIN_END = os.environ.get("CHALLENGER_TRAIN_END", "2026-09-30")
-COMPARE_START = os.environ.get("COMPARE_START", "2026-10-01")
+CHALLENGER_TRAIN_END = os.environ.get("CHALLENGER_TRAIN_END")  # optional fixed windows
+COMPARE_START = os.environ.get("COMPARE_START")
+COMPARE_DAYS = int(os.environ.get("COMPARE_DAYS", "30"))
 PURGE_DAYS = 5
 ES_DAYS = 60
 OPTUNA_TRIALS = int(os.environ.get("OPTUNA_TRIALS", "8"))
@@ -51,8 +53,13 @@ DECISION_PATH = Path("reports/retrain_decision.json")
 
 def _windows(df: pd.DataFrame) -> dict[str, np.ndarray]:
     dates = pd.DatetimeIndex(sorted(pd.to_datetime(df["date"]).unique()))
-    compare_dates = dates[dates >= pd.Timestamp(COMPARE_START)]
-    train_dates = dates[(dates <= pd.Timestamp(CHALLENGER_TRAIN_END)) & (dates < compare_dates[0])]
+    if COMPARE_START:
+        compare_dates = dates[dates >= pd.Timestamp(COMPARE_START)]
+    else:
+        compare_dates = dates[-COMPARE_DAYS:]  # rolling: the most recent labelled weeks
+    train_dates = dates[dates < compare_dates[0]]
+    if CHALLENGER_TRAIN_END:
+        train_dates = train_dates[train_dates <= pd.Timestamp(CHALLENGER_TRAIN_END)]
     train_dates = train_dates[:-PURGE_DAYS]  # purge gap before the comparison window
     es_dates = train_dates[-ES_DAYS:]
     inner_dates = train_dates[: -(ES_DAYS + PURGE_DAYS)]
@@ -63,7 +70,18 @@ def _windows(df: pd.DataFrame) -> dict[str, np.ndarray]:
         "compare": np.isin(d, compare_dates),
         "train_end": str(pd.Timestamp(train_dates[-1]).date()),
         "compare_range": [str(pd.Timestamp(compare_dates[0]).date()), str(pd.Timestamp(compare_dates[-1]).date())],
+        "data_end": str(pd.Timestamp(dates[-1]).date()),
     }
+
+
+def last_retrain_data_end() -> str | None:
+    """Latest labelled date the previous retraining run used (None if it never ran)."""
+    if not DECISION_PATH.exists():
+        return None
+    try:
+        return json.loads(DECISION_PATH.read_text(encoding="utf-8")).get("data_end")
+    except Exception:
+        return None
 
 
 def _fit_catboost(params: dict[str, Any], X_tr, y_tr, X_es, y_es) -> CatBoostClassifier:
@@ -147,7 +165,8 @@ def run_retraining(features_path: Path = COMBINED_FEATURES_PATH, trigger: str = 
         client = MlflowClient()
         mv = mlflow.register_model(info.model_uri, REGISTERED_MODEL_NAME)
         for key, val in {"model_type": "CatBoost", "role": "challenger", "trigger": trigger,
-                         "compare_macro_f1": f"{chall_metrics['macro_f1']:.4f}"}.items():
+                         "compare_macro_f1": f"{chall_metrics['macro_f1']:.4f}",
+                         "train_end": w["train_end"], "data_end": w["data_end"]}.items():
             client.set_model_version_tag(REGISTERED_MODEL_NAME, mv.version, key, val)
         client.set_registered_model_alias(REGISTERED_MODEL_NAME, "challenger", mv.version)
         if promote:
@@ -164,6 +183,7 @@ def run_retraining(features_path: Path = COMBINED_FEATURES_PATH, trigger: str = 
         "compare_window": w["compare_range"],
         "compare_rows": int(w["compare"].sum()),
         "challenger_train_end": w["train_end"],
+        "data_end": w["data_end"],
         "optuna_best_params": best_params,
         "champion_metrics": champ_metrics,
         "challenger_metrics": chall_metrics,
