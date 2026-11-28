@@ -1,0 +1,5 @@
+outs:
+- md5: 66904f43ff0081dc091ba0cc50c528af
+  size: 10989647
+  hash: md5
+  path: stocks_with_macro.csv

@@ -1,0 +1,6 @@
+outs:
+- md5: fec1163e62844cfa4ba278ade5de6f7e.dir
+  size: 295182
+  nfiles: 7
+  hash: md5
+  path: daily
